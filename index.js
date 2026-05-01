@@ -907,6 +907,36 @@ const FEATURES = {
         const t = (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
         if (t === "upgrade") return b.parentElement;
       }
+      // Windows Store builds often have no Upgrade/Plus pill at all. Keep
+      // this fallback Windows-only so macOS continues to use the native slot.
+      if (!/\bWin/i.test(navigator.platform || navigator.userAgent || "")) {
+        return null;
+      }
+      const existingSlot = document.querySelector('[data-codexpp="usage-slot"]');
+      if (existingSlot instanceof HTMLElement) return existingSlot;
+      for (const b of btns) {
+        const t = (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        if (t !== "settings") continue;
+        let row = b.parentElement;
+        while (row && row !== document.body) {
+          const cls = String(row.className || "");
+          if (
+            /\bflex\b/.test(cls) &&
+            /\bitems-center\b/.test(cls) &&
+            /\bgap-2\b/.test(cls)
+          ) {
+            break;
+          }
+          row = row.parentElement;
+        }
+        if (!(row instanceof HTMLElement)) continue;
+        const slot = document.createElement("div");
+        slot.dataset.codexpp = "usage-slot";
+        slot.dataset.codexppUsageSlot = "settings-inline-windows";
+        slot.className = "flex shrink-0";
+        row.appendChild(slot);
+        return slot;
+      }
       return null;
     };
 
@@ -938,6 +968,10 @@ const FEATURES = {
       mounted = renderUsageBox(api, snapshot);
       mounted.dataset.codexpp = "usage-box";
       slot.appendChild(mounted);
+      if (slot.dataset.codexppUsageSlot === "settings-inline-windows") {
+        mounted.style.width = "auto";
+        mounted.style.minWidth = "4.75rem";
+      }
       log("mounted usage box", {
         slotTag: slot.tagName,
         slotClass: slot.className,
@@ -987,6 +1021,9 @@ const FEATURES = {
       if (mounted) {
         mounted.remove();
         mounted = null;
+      }
+      for (const slot of document.querySelectorAll('[data-codexpp="usage-slot"]')) {
+        if (slot instanceof HTMLElement && slot.children.length === 0) slot.remove();
       }
     };
   },
@@ -1250,7 +1287,7 @@ const FEATURES = {
 
     const buttonLabel = (node) =>
       normalize(node.getAttribute("aria-label") || node.textContent || "")
-        .replace(/\s*[⌘⇧⌥⌃^].*$/, "")
+        .replace(/\s*(?:[⌘⇧⌥⌃^]|ctrl|control|alt|option|shift|cmd|command)\+?.*$/i, "")
         .trim();
 
     const isCompositeActionText = (node) => {
@@ -2733,7 +2770,7 @@ function renderUsageBox(api, snapshot) {
   btn.type = "button";
   // Keep alignment consistent with the row that hosted the upgrade pill.
   btn.className =
-    "flex items-center justify-between gap-2 rounded-md border border-token-border " +
+    "flex w-full min-w-0 items-center justify-between gap-2 rounded-md border border-token-border " +
     "px-2 py-1 text-xs cursor-interaction transition-colors " +
     "hover:bg-token-foreground/10";
 
