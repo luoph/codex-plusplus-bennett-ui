@@ -907,6 +907,36 @@ const FEATURES = {
         const t = (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
         if (t === "upgrade") return b.parentElement;
       }
+      // Windows Store builds often have no Upgrade/Plus pill at all. Keep
+      // this fallback Windows-only so macOS continues to use the native slot.
+      if (!/\bWin/i.test(navigator.platform || navigator.userAgent || "")) {
+        return null;
+      }
+      const existingSlot = document.querySelector('[data-codexpp="usage-slot"]');
+      if (existingSlot instanceof HTMLElement) return existingSlot;
+      for (const b of btns) {
+        const t = (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+        if (t !== "settings") continue;
+        let row = b.parentElement;
+        while (row && row !== document.body) {
+          const cls = String(row.className || "");
+          if (
+            /\bflex\b/.test(cls) &&
+            /\bitems-center\b/.test(cls) &&
+            /\bgap-2\b/.test(cls)
+          ) {
+            break;
+          }
+          row = row.parentElement;
+        }
+        if (!(row instanceof HTMLElement)) continue;
+        const slot = document.createElement("div");
+        slot.dataset.codexpp = "usage-slot";
+        slot.dataset.codexppUsageSlot = "settings-inline-windows";
+        slot.className = "flex shrink-0";
+        row.appendChild(slot);
+        return slot;
+      }
       return null;
     };
 
@@ -938,6 +968,10 @@ const FEATURES = {
       mounted = renderUsageBox(api, snapshot);
       mounted.dataset.codexpp = "usage-box";
       slot.appendChild(mounted);
+      if (slot.dataset.codexppUsageSlot === "settings-inline-windows") {
+        mounted.style.width = "auto";
+        mounted.style.minWidth = "4.75rem";
+      }
       log("mounted usage box", {
         slotTag: slot.tagName,
         slotClass: slot.className,
@@ -987,6 +1021,9 @@ const FEATURES = {
       if (mounted) {
         mounted.remove();
         mounted = null;
+      }
+      for (const slot of document.querySelectorAll('[data-codexpp="usage-slot"]')) {
+        if (slot instanceof HTMLElement && slot.children.length === 0) slot.remove();
       }
     };
   },
@@ -1045,16 +1082,24 @@ const FEATURES = {
       "aside.pointer-events-auto.relative.flex.overflow-hidden";
     const SETTINGS_SIDEBAR_SELECTOR =
       ".window-fx-sidebar-surface.w-token-sidebar";
+    const MIN_EXPANDED_WIDTH = 240;
+    const DEFAULT_EXPANDED_WIDTH = 300;
 
     document.getElementById(STYLE_ID)?.remove();
     const style = document.createElement("style");
     style.id = STYLE_ID;
     document.head.appendChild(style);
 
-    function applyWidth(px) {
+    function validExpandedWidth(px) {
       // Sanity-clamp; ignore zero/negative/absurd values that could be
-      // observed mid-mount or during a transition.
-      if (!Number.isFinite(px) || px < 120 || px > 900) return;
+      // observed mid-mount or during a transition. Widths below Codex's
+      // native sidebar minimum are the collapsed rail, not the width
+      // Settings should inherit when opened via keyboard shortcut.
+      return Number.isFinite(px) && px >= MIN_EXPANDED_WIDTH && px <= 900;
+    }
+
+    function applyWidth(px) {
+      if (!validExpandedWidth(px)) return;
       // Override only the settings page sidebar. Main UI's <aside> sets
       // its own inline width — we mustn't touch it. Use !important to win
       // against the `w-token-sidebar` utility.
@@ -1062,9 +1107,26 @@ const FEATURES = {
         `${SETTINGS_SIDEBAR_SELECTOR} { width: ${px}px !important; }`;
     }
 
+    function rememberWidth(px) {
+      if (!validExpandedWidth(px)) return;
+      const width = Math.max(px, nativeSidebarWidth());
+      api.storage.set(STORAGE_KEY, width);
+      applyWidth(width);
+    }
+
+    function nativeSidebarWidth() {
+      const probe = document.createElement("div");
+      probe.style.cssText =
+        "position:fixed;left:-9999px;top:-9999px;width:var(--spacing-token-sidebar);height:1px;pointer-events:none;";
+      document.body.appendChild(probe);
+      const width = Math.round(probe.getBoundingClientRect().width);
+      probe.remove();
+      return validExpandedWidth(width) ? width : DEFAULT_EXPANDED_WIDTH;
+    }
+
     // Seed from last-known so the first settings-page paint matches.
     const seeded = Number(api.storage.get(STORAGE_KEY, NaN));
-    if (Number.isFinite(seeded)) applyWidth(seeded);
+    rememberWidth(validExpandedWidth(seeded) ? seeded : nativeSidebarWidth());
 
     let resizeObs = null;
     let observed = null;
@@ -1079,19 +1141,14 @@ const FEATURES = {
       if (!aside) return;
       // Pick up the current width immediately, then observe.
       const initial = Math.round(aside.getBoundingClientRect().width);
-      if (initial > 0) {
-        api.storage.set(STORAGE_KEY, initial);
-        applyWidth(initial);
-      }
+      rememberWidth(initial);
       resizeObs = new ResizeObserver((entries) => {
         const entry = entries[0];
         if (!entry) return;
         const w = Math.round(
           entry.contentRect?.width ?? aside.getBoundingClientRect().width,
         );
-        if (w <= 0) return;
-        api.storage.set(STORAGE_KEY, w);
-        applyWidth(w);
+        rememberWidth(w);
       });
       resizeObs.observe(aside);
     }
@@ -1132,7 +1189,7 @@ const FEATURES = {
       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 " +
       "focus-visible:outline-token-border cursor-interaction";
     const actions = [
-      { key: "new chat", aliases: ["new chat"], label: "New chat" },
+      { key: "new chat", aliases: ["new chat", "quick chat"], label: "New chat" },
       { key: "search", aliases: ["search"], label: "Search" },
       { key: "plugins", aliases: ["plugin", "plugins"], label: "Plugins" },
       { key: "automations", aliases: ["automation", "automations"], label: "Automations" },
@@ -1250,7 +1307,7 @@ const FEATURES = {
 
     const buttonLabel = (node) =>
       normalize(node.getAttribute("aria-label") || node.textContent || "")
-        .replace(/\s*[⌘⇧⌥⌃^].*$/, "")
+        .replace(/\s*(?:[⌘⇧⌥⌃^]|ctrl|control|alt|option|shift|cmd|command)\+?.*$/i, "")
         .trim();
 
     const isCompositeActionText = (node) => {
@@ -1542,10 +1599,10 @@ const FEATURES = {
     const scheduleApply = () => {
       if (scheduled) return;
       scheduled = true;
-      window.setTimeout(() => {
+      requestAnimationFrame(() => {
         scheduled = false;
         apply();
-      }, 0);
+      });
     };
 
     clearStaleNodes();
@@ -1845,8 +1902,8 @@ const FEATURES = {
         .filter((node, index, rows) => rows.indexOf(node) === index);
 
     const clearMarks = () => {
-      for (const [row, handler] of rowHandlers) {
-        row.removeEventListener("contextmenu", handler);
+      for (const [, record] of rowHandlers) {
+        record.dispose?.();
       }
       rowHandlers.clear();
       document.querySelectorAll(`[${ATTR}]`).forEach((node) => {
@@ -1976,20 +2033,96 @@ const FEATURES = {
         });
     };
 
-    const bindColorMenu = (row, label) => {
-      const handler = (event) => {
-        pendingContextMenu = {
-          label,
-          x: event.clientX,
-          y: event.clientY,
-          at: Date.now(),
-        };
-        [0, 50, 150, 350].forEach((delay) =>
-          window.setTimeout(injectColorMenuIntoNativeMenu, delay),
-        );
+    const projectPathForRow = (row) => {
+      const action = row?.querySelector?.("[data-app-action-sidebar-project-id]");
+      const value = action instanceof HTMLElement
+        ? action.getAttribute("data-app-action-sidebar-project-id")
+        : null;
+      return value || null;
+    };
+
+    const numberOrClient = (value, fallback) =>
+      typeof value === "number" && Number.isFinite(value) ? value : fallback;
+
+    const seedProjectMenu = (label, event, anchor, row) => {
+      const anchorRect = anchor?.getBoundingClientRect?.();
+      pendingContextMenu = {
+        label,
+        projectPath: projectPathForRow(row),
+        x: numberOrClient(event?.clientX, anchorRect?.right ?? anchorRect?.left ?? 0),
+        y: numberOrClient(event?.clientY, anchorRect?.top ?? 0),
+        at: Date.now(),
       };
-      row.addEventListener("contextmenu", handler);
-      rowHandlers.set(row, handler);
+      [0, 50, 150, 350].forEach((delay) =>
+        window.setTimeout(injectColorMenuIntoNativeMenu, delay),
+      );
+    };
+
+    const bindColorMenu = (row, label) => {
+      const existing = rowHandlers.get(row);
+      const overflowButton = findProjectOverflowButton(row, label);
+      if (existing?.label === label && existing?.overflowButton === overflowButton) {
+        return;
+      }
+      existing?.dispose?.();
+
+      const contextHandler = (event) => {
+        seedProjectMenu(label, event, row, row);
+      };
+      const overflowHandler = (event) => {
+        seedProjectMenu(label, event, overflowButton, row);
+      };
+
+      row.addEventListener("contextmenu", contextHandler);
+      if (overflowButton) {
+        overflowButton.addEventListener("pointerdown", overflowHandler, true);
+        overflowButton.addEventListener("click", overflowHandler, true);
+      }
+
+      rowHandlers.set(row, {
+        label,
+        overflowButton,
+        dispose() {
+          row.removeEventListener("contextmenu", contextHandler);
+          if (overflowButton) {
+            overflowButton.removeEventListener("pointerdown", overflowHandler, true);
+            overflowButton.removeEventListener("click", overflowHandler, true);
+          }
+        },
+      });
+    };
+
+    const findProjectOverflowButton = (row, label) =>
+      Array.from(row.querySelectorAll("button, [role='button']"))
+        .filter((node) => isProjectOverflowButton(row, label, node))
+        .sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right)[0] || null;
+
+    const isProjectOverflowButton = (row, label, button) => {
+      if (!(button instanceof HTMLElement) || !row.contains(button) || !visible(button)) {
+        return false;
+      }
+      if (labelFor(button) === label) return false;
+      const rect = button.getBoundingClientRect();
+      if (rect.width > 52 || rect.height > 52) return false;
+      const text = normalize(button.textContent || "");
+      const aria = normalize(button.getAttribute("aria-label") || "");
+      return (
+        !text ||
+        aria.includes("more") ||
+        aria.includes("menu") ||
+        button.getAttribute("aria-haspopup") === "menu" ||
+        Boolean(button.querySelector("svg"))
+      );
+    };
+
+    const onProjectOverflowTrigger = (event) => {
+      const button = event.target?.closest?.("button, [role='button']");
+      if (!(button instanceof HTMLElement)) return;
+      const row = button.closest("div[role='listitem'][aria-label]");
+      if (!isProjectRow(row)) return;
+      const label = labelFor(row);
+      if (!isProjectOverflowButton(row, label, button)) return;
+      seedProjectMenu(label, event, button, row);
     };
 
     const openColorMenu = (label, x, y, anchor) => {
@@ -2087,25 +2220,54 @@ const FEATURES = {
       const nativeMenu = findNativeContextMenu(pendingContextMenu.x, pendingContextMenu.y);
       if (!nativeMenu || nativeMenu.querySelector(`[${MENU_ATTR}="trigger"]`)) return;
 
+      const nativeItem = nativeMenu.querySelector('[role="menuitem"]');
+      const copyPathItem = createNativeMenuItem({
+        nativeItem,
+        attr: "copy-path",
+        label: "Copy folder path",
+        icon: copyPathIcon(),
+        onActivate: async (event) => {
+          event?.preventDefault?.();
+          event?.stopPropagation?.();
+          const projectPath = pendingContextMenu?.projectPath;
+          if (!projectPath) return;
+          try {
+            await copyText(projectPath);
+          } catch (e) {
+            api.log.warn("copy project path failed", e);
+          }
+          nativeMenu.remove();
+        },
+      });
+
       const trigger = document.createElement("div");
       trigger.setAttribute("role", "menuitem");
       trigger.setAttribute("tabindex", "-1");
+      trigger.setAttribute("data-orientation", "vertical");
       trigger.setAttribute(MENU_ATTR, "trigger");
       trigger.className =
-        "text-token-foreground outline-hidden rounded-lg px-[var(--padding-row-x)] " +
-        "py-[var(--padding-row-y)] text-sm electron:text-base flex w-full items-center " +
-        "group hover:bg-token-list-hover-background focus:bg-token-list-hover-background " +
-        "cursor-interaction";
+        nativeItem instanceof HTMLElement && nativeItem.className
+          ? nativeItem.className
+          : "text-token-foreground outline-hidden rounded-lg px-[var(--padding-row-x)] " +
+            "py-[var(--padding-row-y)] text-sm electron:text-base flex w-full items-center " +
+            "group hover:bg-token-list-hover-background focus:bg-token-list-hover-background " +
+            "cursor-interaction";
+      trigger.classList.remove("w-full", "items-center", "gap-2");
+      trigger.classList.add("flex", "flex-col");
+
+      const row = document.createElement("div");
+      row.className = "flex w-full items-center gap-1.5";
 
       const label = document.createElement("span");
-      label.className = "min-w-0 flex-1 truncate";
+      label.className = "flex-1 min-w-0 truncate";
       label.textContent = "Project color";
 
       const chevron = document.createElement("span");
       chevron.className = "text-token-text-secondary";
       chevron.textContent = "›";
 
-      trigger.append(label, chevron);
+      row.append(projectColorIcon(), label, chevron);
+      trigger.appendChild(row);
       const open = (event) => {
         event?.preventDefault?.();
         event?.stopPropagation?.();
@@ -2114,8 +2276,116 @@ const FEATURES = {
       trigger.addEventListener("pointerenter", open);
       trigger.addEventListener("focus", open);
       trigger.addEventListener("click", open);
-      nativeMenu.appendChild(trigger);
+      const removeItem = findRemoveMenuItem(nativeMenu);
+      nativeMenu.insertBefore(copyPathItem, removeItem);
+      nativeMenu.insertBefore(trigger, removeItem);
     };
+
+    const createNativeMenuItem = ({ nativeItem, attr, label, icon, onActivate }) => {
+      const item = document.createElement("div");
+      item.setAttribute("role", "menuitem");
+      item.setAttribute("tabindex", "-1");
+      item.setAttribute("data-orientation", "vertical");
+      item.setAttribute(MENU_ATTR, attr);
+      item.className =
+        nativeItem instanceof HTMLElement && nativeItem.className
+          ? nativeItem.className
+          : "text-token-foreground outline-hidden rounded-lg px-[var(--padding-row-x)] " +
+            "py-[var(--padding-row-y)] text-sm electron:text-base flex flex-col " +
+            "group hover:bg-token-list-hover-background focus:bg-token-list-hover-background " +
+            "cursor-interaction";
+      item.classList.remove("w-full", "items-center", "gap-2");
+      item.classList.add("flex", "flex-col");
+
+      const row = document.createElement("div");
+      row.className = "flex w-full items-center gap-1.5";
+
+      const text = document.createElement("span");
+      text.className = "flex-1 min-w-0 truncate";
+      text.textContent = label;
+
+      row.append(icon, text);
+      item.appendChild(row);
+      item.addEventListener("click", onActivate);
+      return item;
+    };
+
+    const copyText = async (text) => {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const input = document.createElement("textarea");
+      input.value = text;
+      input.setAttribute("readonly", "");
+      input.style.cssText = "position:fixed;left:-9999px;top:-9999px;";
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      input.remove();
+    };
+
+    const copyPathIcon = () => {
+      const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      icon.setAttribute("width", "20");
+      icon.setAttribute("height", "20");
+      icon.setAttribute("viewBox", "0 0 20 20");
+      icon.setAttribute("fill", "none");
+      icon.setAttribute("aria-hidden", "true");
+      icon.classList.add(
+        "icon-xs",
+        "shrink-0",
+        "opacity-75",
+        "group-focus:opacity-100",
+        "group-hover:opacity-100",
+      );
+
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute(
+        "d",
+        "M7.5 5.5V4.75C7.5 3.78 8.28 3 9.25 3H14C14.97 3 15.75 3.78 15.75 4.75V11.5C15.75 12.47 14.97 13.25 14 13.25H13.25M6 6.75H10.75C11.72 6.75 12.5 7.53 12.5 8.5V15.25C12.5 16.22 11.72 17 10.75 17H6C5.03 17 4.25 16.22 4.25 15.25V8.5C4.25 7.53 5.03 6.75 6 6.75Z",
+      );
+      path.setAttribute("stroke", "currentColor");
+      path.setAttribute("stroke-width", "1.35");
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      icon.appendChild(path);
+      return icon;
+    };
+
+    const projectColorIcon = () => {
+      const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      icon.setAttribute("width", "16");
+      icon.setAttribute("height", "16");
+      icon.setAttribute("viewBox", "0 0 16 16");
+      icon.setAttribute("fill", "none");
+      icon.setAttribute("aria-hidden", "true");
+      icon.classList.add(
+        "icon-xs",
+        "shrink-0",
+        "opacity-75",
+        "group-focus:opacity-100",
+        "group-hover:opacity-100",
+      );
+
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute(
+        "d",
+        "M8 2.25C4.82 2.25 2.25 4.59 2.25 7.47C2.25 10.16 4.34 12.08 6.86 12.08H7.7C8.22 12.08 8.59 12.58 8.44 13.08C8.27 13.67 8.7 14.25 9.31 14.25C11.83 14.25 13.75 11.61 13.75 8.18C13.75 4.91 11.17 2.25 8 2.25Z M5.05 7.25H5.06 M6.4 5.05H6.41 M9.05 4.85H9.06 M10.95 7.05H10.96",
+      );
+      path.setAttribute("stroke", "currentColor");
+      path.setAttribute("stroke-width", "1.45");
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      icon.appendChild(path);
+      return icon;
+    };
+
+    const findRemoveMenuItem = (nativeMenu) =>
+      Array.from(nativeMenu.querySelectorAll('[role="menuitem"]')).find((item) => {
+        const text = normalize(item.textContent || "");
+        return text === "remove" || text === "delete" || text.includes("remove from");
+      }) || null;
 
     const findNativeContextMenu = (x, y) => {
       const menus = Array.from(document.querySelectorAll('[role="menu"][data-state="open"]'))
@@ -2180,9 +2450,9 @@ const FEATURES = {
 
     const reconcileMarkedRows = (rows) => {
       const active = new Set(rows);
-      for (const [row, handler] of Array.from(rowHandlers.entries())) {
+      for (const [row, record] of Array.from(rowHandlers.entries())) {
         if (active.has(row) && row.isConnected) continue;
-        row.removeEventListener("contextmenu", handler);
+        record.dispose?.();
         rowHandlers.delete(row);
         clearRowMarks(row);
       }
@@ -2215,20 +2485,20 @@ const FEATURES = {
     const scheduleApply = () => {
       if (scheduled || disposed) return;
       scheduled = true;
-      window.setTimeout(() => {
+      requestAnimationFrame(() => {
         scheduled = false;
         if (disposed) return;
         apply();
-      }, 0);
+      });
     };
 
-    let childListTimer = null;
+    let childListFrame = 0;
     const scheduleApplySoon = () => {
-      if (disposed || childListTimer) return;
-      childListTimer = window.setTimeout(() => {
-        childListTimer = null;
+      if (disposed || childListFrame) return;
+      childListFrame = requestAnimationFrame(() => {
+        childListFrame = 0;
         scheduleApply();
-      }, 120);
+      });
     };
 
     scheduleApply();
@@ -2237,6 +2507,8 @@ const FEATURES = {
     );
     const observer = new MutationObserver(scheduleApplySoon);
     observer.observe(document.body, { childList: true, subtree: true });
+    document.addEventListener("pointerdown", onProjectOverflowTrigger, true);
+    document.addEventListener("click", onProjectOverflowTrigger, true);
     window.addEventListener("focus", scheduleApply);
     document.addEventListener("visibilitychange", scheduleApply);
 
@@ -2245,8 +2517,10 @@ const FEATURES = {
     return () => {
       disposed = true;
       observer.disconnect();
-      if (childListTimer) window.clearTimeout(childListTimer);
+      if (childListFrame) cancelAnimationFrame(childListFrame);
       retryTimers.forEach((timer) => window.clearTimeout(timer));
+      document.removeEventListener("pointerdown", onProjectOverflowTrigger, true);
+      document.removeEventListener("click", onProjectOverflowTrigger, true);
       window.removeEventListener("focus", scheduleApply);
       document.removeEventListener("visibilitychange", scheduleApply);
       closeMenu();
@@ -2733,7 +3007,7 @@ function renderUsageBox(api, snapshot) {
   btn.type = "button";
   // Keep alignment consistent with the row that hosted the upgrade pill.
   btn.className =
-    "flex items-center justify-between gap-2 rounded-md border border-token-border " +
+    "flex w-full min-w-0 items-center justify-between gap-2 rounded-md border border-token-border " +
     "px-2 py-1 text-xs cursor-interaction transition-colors " +
     "hover:bg-token-foreground/10";
 
