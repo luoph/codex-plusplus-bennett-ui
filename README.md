@@ -10,7 +10,8 @@ Codex++ tweak with small quality-of-life UI improvements for the Codex desktop a
 - Square/match sidebar styling
 - Compact sidebar action grid
 - Project row backgrounds and color theming
-- Project names under pinned chats, with optional project color dots
+- Project labels under pinned chats and chronological chat lists
+- Multi-select sidebar chats with batch Pin, Archive, and Open in mini window actions
 
 ## Install
 
