@@ -25,6 +25,8 @@
  *                          grid of filled buttons.
  *  • sidebar-project-backgrounds  Add subtle grouped backgrounds behind
  *                                 project rows in the main sidebar.
+ *  • sidebar-chat-multi-select  Cmd/Ctrl-click sidebar chats to select
+ *                               multiple rows and run batch actions.
  *  • show-pinned-chat-project-names  Shows a small project name under
  *                                    pinned sidebar chats.
  *  • show-message-metrics-on-hover  Shows Codex token metrics beside
@@ -45,6 +47,7 @@ module.exports = {
       startMainMetricsProvider(api);
       startMainUsageProvider(api);
       startMainProjectLabelProvider(api);
+      startMainSidebarBatchMenuProvider(api);
       return;
     }
 
@@ -59,6 +62,7 @@ module.exports = {
         "match-sidebar-width": true,
         "sidebar-action-grid": true,
         "sidebar-project-backgrounds": true,
+        "sidebar-chat-multi-select": true,
         "show-pinned-chat-project-names": true,
       },
     };
@@ -160,6 +164,12 @@ function renderSettings(root, state) {
       title: "Sidebar project backgrounds",
       description:
         "Add subtle grouped backgrounds behind project rows so adjacent projects are easier to scan.",
+    },
+    {
+      id: "sidebar-chat-multi-select",
+      title: "Multi-select sidebar chats",
+      description:
+        "Cmd/Ctrl-click sidebar chats to select multiple rows, then right-click for batch actions.",
     },
     {
       id: "show-pinned-chat-project-names",
@@ -1633,6 +1643,497 @@ const FEATURES = {
       obs.disconnect();
       removeWrapper();
       cleanupMarks();
+      style.remove();
+    };
+  },
+
+  /**
+   * Let sidebar chat rows be multi-selected with Cmd/Ctrl-click, then expose
+   * batch actions from a right-click menu. We deliberately call Codex's native
+   * controls for the actual actions so the app owns persistence and side
+   * effects.
+   */
+  "sidebar-chat-multi-select"(api) {
+    const STYLE_ID = "codexpp-sidebar-chat-multi-select";
+    const ROW_ATTR = "data-codexpp-sidebar-chat-selectable";
+    const SELECTED_ATTR = "data-codexpp-sidebar-chat-selected";
+    const TARGET_ATTR = "data-codexpp-sidebar-chat-selected-target";
+    const MENU_ATTR = "data-codexpp-sidebar-chat-multi-select-menu";
+    const ASIDE_SELECTOR =
+      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const THREAD_SELECTOR = [
+      "[data-app-action-sidebar-thread-row]",
+      "[data-app-action-sidebar-thread-id]",
+      "[data-app-action-sidebar-task-id]",
+      "[data-sidebar-thread-id]",
+      "[data-app-action-sidebar-thread-pinned]",
+      "[data-app-action-sidebar-task-pinned]",
+      "[data-sidebar-thread-pinned]",
+    ].join(", ");
+    const selectedIds = new Set();
+    const rowHandlers = new Map();
+    let disposed = false;
+    let lastAnchorId = null;
+    let actionInProgress = false;
+
+    document.getElementById(STYLE_ID)?.remove();
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      [${ROW_ATTR}="true"] {
+        user-select: none !important;
+      }
+
+      [${TARGET_ATTR}="true"] {
+        background-color: var(--color-token-list-hover-background, color-mix(in srgb, currentColor 8%, transparent)) !important;
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 38%, transparent) !important;
+      }
+
+      [${MENU_ATTR}="item"][disabled] {
+        cursor: default !important;
+        opacity: 0.45 !important;
+      }
+
+      [${MENU_ATTR}="label"] {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+      }
+    `;
+    document.head.appendChild(style);
+
+    const normalizeThreadId = (value) =>
+      String(value || "")
+        .trim()
+        .replace(/^(local|remote|pending-worktree):/, "");
+
+    const attrValue = (node, names) => {
+      if (!(node instanceof HTMLElement)) return null;
+      for (const name of names) {
+        const value = node.getAttribute(name);
+        if (value != null && value !== "") return value;
+      }
+      const suffixes = new Set(names.map((name) => name.split("-").at(-1)));
+      for (const attr of Array.from(node.attributes || [])) {
+        const name = attr.name.toLowerCase();
+        if (!name.includes("sidebar") || !name.includes("thread")) continue;
+        if (
+          names.some((expected) => name.endsWith(expected.replace(/^data-/, ""))) ||
+          Array.from(suffixes).some((suffix) => name.endsWith(`-${suffix}`))
+        ) {
+          return attr.value;
+        }
+      }
+      return null;
+    };
+
+    const threadMeta = (node) => {
+      if (!(node instanceof HTMLElement)) return null;
+      const id = attrValue(node, [
+        "data-app-action-sidebar-thread-id",
+        "data-app-action-sidebar-task-id",
+        "data-sidebar-thread-id",
+      ]);
+      const kind = attrValue(node, [
+        "data-app-action-sidebar-thread-kind",
+        "data-app-action-sidebar-task-kind",
+        "data-sidebar-thread-kind",
+      ]);
+      if (!id || (kind && kind !== "local")) return null;
+      return { id: normalizeThreadId(id) };
+    };
+
+    const mainSidebar = () => {
+      const aside = document.querySelector(ASIDE_SELECTOR);
+      return aside instanceof HTMLElement ? aside : null;
+    };
+
+    const interactiveTargetFor = (host, row) => {
+      const interactive = host?.closest?.(
+        [
+          "[role='button']",
+          "a",
+          "button",
+          "[class*='hover:bg-token-list-hover-background']",
+          "[class*='bg-token-list-selected-background']",
+          "[class*='bg-token-list-hover-background']",
+        ].join(", "),
+      );
+      if (interactive instanceof HTMLElement && row?.contains?.(interactive)) {
+        return interactive;
+      }
+      return host instanceof HTMLElement ? host : row;
+    };
+
+    const threadRows = () => {
+      const sidebar = mainSidebar();
+      if (!sidebar) return [];
+      const rows = new Map();
+      const candidates = sidebar.querySelectorAll(`${THREAD_SELECTOR}, [role='listitem']`);
+      for (const node of candidates) {
+        if (!(node instanceof HTMLElement)) continue;
+        const source = threadMeta(node) ? node : node.querySelector?.(THREAD_SELECTOR);
+        const meta = threadMeta(source);
+        if (!meta?.id) continue;
+        const row = source.closest("[role='listitem']") || source;
+        const host = source instanceof HTMLElement ? source : row;
+        if (!(row instanceof HTMLElement) || !(host instanceof HTMLElement)) continue;
+        rows.set(meta.id, {
+          id: meta.id,
+          row,
+          host,
+          target: interactiveTargetFor(host, row),
+        });
+      }
+      return Array.from(rows.values());
+    };
+
+    const rowRecordFromTarget = (target) => {
+      if (!(target instanceof Element)) return null;
+      const source =
+        target.closest?.(THREAD_SELECTOR) ||
+        target.closest?.("[role='listitem']")?.querySelector?.(THREAD_SELECTOR);
+      const row = source?.closest?.("[role='listitem']");
+      if (!(source instanceof HTMLElement) || !(row instanceof HTMLElement)) return null;
+      const meta = threadMeta(source);
+      if (!meta?.id) return null;
+      return {
+        id: meta.id,
+        row,
+        host: source,
+        target: interactiveTargetFor(source, row),
+      };
+    };
+
+    const selectedRecords = () => {
+      const rows = threadRows();
+      return Array.from(selectedIds)
+        .map((id) => rows.find((row) => row.id === id))
+        .filter(Boolean);
+    };
+
+    const clearSelection = () => {
+      selectedIds.clear();
+      lastAnchorId = null;
+      closeNativeMenu();
+      applySelection();
+    };
+
+    const toggleSelection = (id) => {
+      if (selectedIds.has(id)) selectedIds.delete(id);
+      else selectedIds.add(id);
+      lastAnchorId = id;
+      applySelection();
+    };
+
+    const selectOnly = (id) => {
+      selectedIds.clear();
+      selectedIds.add(id);
+      lastAnchorId = id;
+      applySelection();
+    };
+
+    const selectRangeTo = (id) => {
+      const rows = threadRows();
+      const start = rows.findIndex((row) => row.id === lastAnchorId);
+      const end = rows.findIndex((row) => row.id === id);
+      if (start < 0 || end < 0) {
+        toggleSelection(id);
+        return;
+      }
+      const [from, to] = start < end ? [start, end] : [end, start];
+      for (const row of rows.slice(from, to + 1)) selectedIds.add(row.id);
+      applySelection();
+    };
+
+    const applySelection = () => {
+      const rows = threadRows();
+      const visibleIds = new Set(rows.map((row) => row.id));
+      for (const id of Array.from(selectedIds)) {
+        if (!visibleIds.has(id)) selectedIds.delete(id);
+      }
+      document
+        .querySelectorAll(`[${ROW_ATTR}], [${SELECTED_ATTR}], [${TARGET_ATTR}]`)
+        .forEach((node) => {
+          node.removeAttribute?.(ROW_ATTR);
+          node.removeAttribute?.(SELECTED_ATTR);
+          node.removeAttribute?.(TARGET_ATTR);
+        });
+      for (const record of rows) {
+        record.row.setAttribute(ROW_ATTR, "true");
+        bindRowHandlers(record.row);
+        if (!selectedIds.has(record.id)) continue;
+        record.row.setAttribute(SELECTED_ATTR, "true");
+        record.target?.setAttribute?.(TARGET_ATTR, "true");
+      }
+      reconcileRowHandlers(rows);
+    };
+
+    const bindRowHandlers = (row) => {
+      if (!(row instanceof HTMLElement) || rowHandlers.has(row)) return;
+      const pointer = (event) => onPointerDown(event);
+      const context = (event) => onContextMenu(event);
+      row.addEventListener("pointerdown", pointer, true);
+      row.addEventListener("mousedown", pointer, true);
+      row.addEventListener("contextmenu", context, true);
+      rowHandlers.set(row, () => {
+        row.removeEventListener("pointerdown", pointer, true);
+        row.removeEventListener("mousedown", pointer, true);
+        row.removeEventListener("contextmenu", context, true);
+      });
+    };
+
+    const reconcileRowHandlers = (rows) => {
+      const active = new Set(rows.map((record) => record.row));
+      for (const [row, dispose] of Array.from(rowHandlers.entries())) {
+        if (active.has(row) && row.isConnected) continue;
+        dispose();
+        rowHandlers.delete(row);
+      }
+    };
+
+    const isNativeActionClick = (target) =>
+      Boolean(target?.closest?.("button, input, textarea, select, [contenteditable='true']"));
+
+    const onClick = (event) => {
+      if (disposed || actionInProgress) return;
+      const record = rowRecordFromTarget(event.target);
+      if (!record) {
+        if (selectedIds.size && !event.target?.closest?.('[role="menu"]')) clearSelection();
+        return;
+      }
+      if (isNativeActionClick(event.target)) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        if (event.shiftKey) selectRangeTo(record.id);
+        else toggleSelection(record.id);
+        return;
+      }
+      if (selectedIds.size) {
+        clearSelection();
+      }
+    };
+
+    const onContextMenu = (event) => {
+      if (disposed || actionInProgress) return;
+      const record = rowRecordFromTarget(event.target);
+      if (selectedIds.size <= 1) return;
+      if (record && !selectedIds.has(record.id)) {
+        return;
+      }
+      if (!record && !mainSidebar()?.contains?.(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      void openNativeBatchMenu(event.clientX, event.clientY);
+    };
+
+    const onPointerDown = (event) => {
+      if (disposed || actionInProgress || event.button !== 2) return;
+      const record = rowRecordFromTarget(event.target);
+      if (selectedIds.size <= 1) return;
+      if (record && !selectedIds.has(record.id)) return;
+      if (!record && !mainSidebar()?.contains?.(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      void openNativeBatchMenu(event.clientX, event.clientY);
+    };
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape" && selectedIds.size) {
+        event.preventDefault();
+        clearSelection();
+      }
+    };
+
+    const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+    const clickElement = (node) => {
+      if (!(node instanceof HTMLElement)) return false;
+      node.dispatchEvent(new MouseEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+      }));
+      node.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+      }));
+      node.dispatchEvent(new MouseEvent("pointerup", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+      }));
+      node.dispatchEvent(new MouseEvent("mouseup", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0,
+      }));
+      node.click();
+      return true;
+    };
+
+    const buttonByAria = (row, label) =>
+      Array.from(row.querySelectorAll("button"))
+        .find((button) => button instanceof HTMLElement && button.getAttribute("aria-label") === label) || null;
+
+    const runRowButtonAction = async (label) => {
+      const records = selectedRecords();
+      closeNativeMenu();
+      actionInProgress = true;
+      try {
+        for (const record of records) {
+          const button = buttonByAria(record.row, label);
+          if (!button) continue;
+          clickElement(button);
+          await wait(90);
+        }
+      } finally {
+        actionInProgress = false;
+        clearSelection();
+      }
+    };
+
+    const findChatActionsButton = () =>
+      Array.from(document.querySelectorAll("button, [role='button']"))
+        .find((node) => node instanceof HTMLElement && node.getAttribute("aria-label") === "Chat actions") || null;
+
+    const findOpenMiniWindowItem = () =>
+      Array.from(document.querySelectorAll('[role="menu"][data-state="open"] [role="menuitem"], [role="menu"] [role="menuitem"]'))
+        .find((item) => item instanceof HTMLElement && item.textContent?.trim().includes("Open in mini window")) || null;
+
+    const openHeaderActionsMenu = async () => {
+      const button = findChatActionsButton();
+      if (!button) return false;
+      clickElement(button);
+      for (let i = 0; i < 8; i += 1) {
+        await wait(80);
+        if (findOpenMiniWindowItem()) return true;
+      }
+      return false;
+    };
+
+    const openRowsInMiniWindows = async () => {
+      const ids = Array.from(selectedIds);
+      closeNativeMenu();
+      actionInProgress = true;
+      try {
+        for (const id of ids) {
+          const record = threadRows().find((row) => row.id === id);
+          if (!record) continue;
+          clickElement(record.target || record.host);
+          await wait(450);
+          const hasMenu = await openHeaderActionsMenu();
+          if (!hasMenu) {
+            api.log.warn("[sidebar-chat-multi-select] chat actions menu unavailable", { id });
+            continue;
+          }
+          const item = findOpenMiniWindowItem();
+          if (!item) {
+            api.log.warn("[sidebar-chat-multi-select] open mini window item unavailable", { id });
+            continue;
+          }
+          clickElement(item);
+          await wait(300);
+        }
+      } finally {
+        actionInProgress = false;
+        clearSelection();
+      }
+    };
+
+    const actionAvailability = () => {
+      const records = selectedRecords();
+      return {
+        count: selectedIds.size || records.length,
+        canPin: records.some((record) => buttonByAria(record.row, "Pin chat")),
+        canArchive: records.some((record) => buttonByAria(record.row, "Archive chat")),
+      };
+    };
+
+    const openNativeBatchMenu = async (x, y) => {
+      const { count, canPin, canArchive } = actionAvailability();
+      if (!count) return;
+      if (openNativeBatchMenu._open) return;
+      openNativeBatchMenu._open = true;
+      let action = null;
+      try {
+        action =
+          (await api.ipc.invoke("sidebar-chat-batch-menu", {
+            x,
+            y,
+            count,
+            canPin,
+            canArchive,
+          })) || null;
+      } catch (e) {
+        api.log.warn("[sidebar-chat-multi-select] native batch menu unavailable", e);
+        return;
+      } finally {
+        openNativeBatchMenu._open = false;
+      }
+      if (action === "pin") await runRowButtonAction("Pin chat");
+      else if (action === "archive") await runRowButtonAction("Archive chat");
+      else if (action === "mini-window") await openRowsInMiniWindows();
+    };
+
+    const closeNativeMenu = () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }));
+    };
+
+    let scheduled = false;
+    const scheduleApply = () => {
+      if (scheduled || disposed) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        applySelection();
+      });
+    };
+
+    applySelection();
+    const observer = new MutationObserver(scheduleApply);
+    observer.observe(document.body, { childList: true, subtree: true });
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("mousedown", onPointerDown, true);
+    document.addEventListener("click", onClick, true);
+    document.addEventListener("contextmenu", onContextMenu, true);
+    document.addEventListener("keydown", onKeyDown, true);
+
+    api.log.info("sidebar chat multi-select active");
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("mousedown", onPointerDown, true);
+      document.removeEventListener("click", onClick, true);
+      document.removeEventListener("contextmenu", onContextMenu, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      closeNativeMenu();
+      selectedIds.clear();
+      for (const dispose of rowHandlers.values()) dispose();
+      rowHandlers.clear();
+      document
+        .querySelectorAll(`[${ROW_ATTR}], [${SELECTED_ATTR}], [${TARGET_ATTR}]`)
+        .forEach((node) => {
+          node.removeAttribute?.(ROW_ATTR);
+          node.removeAttribute?.(SELECTED_ATTR);
+          node.removeAttribute?.(TARGET_ATTR);
+        });
       style.remove();
     };
   },
@@ -3223,6 +3724,9 @@ const USAGE_GLOBAL_KEY = "__bennettUiImprovementsUsageService";
 const USAGE_HANDLER_KEY = "__bennettUiImprovementsUsageHandler";
 const PROJECT_LABEL_GLOBAL_KEY = "__bennettUiImprovementsProjectLabels";
 const PROJECT_LABEL_HANDLER_KEY = "__bennettUiImprovementsProjectLabelsHandler";
+const SIDEBAR_BATCH_MENU_GLOBAL_KEY = "__bennettUiImprovementsSidebarBatchMenu";
+const SIDEBAR_BATCH_MENU_HANDLER_KEY =
+  "__bennettUiImprovementsSidebarBatchMenuHandler";
 
 function startMainMetricsProvider(api) {
   const service = createMetricsService(api);
@@ -3270,6 +3774,70 @@ function startMainProjectLabelProvider(api) {
   }
 
   api.log.info("[pinned-chat-project-names] main provider active");
+}
+
+function startMainSidebarBatchMenuProvider(api) {
+  globalThis[SIDEBAR_BATCH_MENU_GLOBAL_KEY] = {
+    show: showSidebarBatchMenu,
+  };
+
+  if (!globalThis[SIDEBAR_BATCH_MENU_HANDLER_KEY]) {
+    api.ipc.handle("sidebar-chat-batch-menu", (payload = {}) => {
+      const active = globalThis[SIDEBAR_BATCH_MENU_GLOBAL_KEY];
+      return active?.show?.(payload) || null;
+    });
+    globalThis[SIDEBAR_BATCH_MENU_HANDLER_KEY] = true;
+  }
+
+  api.log.info("[sidebar-chat-multi-select] main menu provider active");
+}
+
+function showSidebarBatchMenu(payload) {
+  const { BrowserWindow, Menu } = require("electron");
+  const count = Math.max(0, Number(payload?.count) || 0);
+  if (!count) return null;
+
+  const win = BrowserWindow.getFocusedWindow();
+  if (!win || win.isDestroyed()) return null;
+
+  const x = Math.max(0, Math.round(Number(payload?.x) || 0));
+  const y = Math.max(0, Math.round(Number(payload?.y) || 0));
+  const canPin = payload?.canPin !== false;
+  const canArchive = payload?.canArchive !== false;
+  const suffix = count === 1 ? "" : "s";
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (action) => {
+      if (settled) return;
+      settled = true;
+      resolve(action);
+    };
+
+    const menu = Menu.buildFromTemplate([
+      {
+        label: `Pin ${count} chat${suffix}`,
+        enabled: canPin,
+        click: () => finish("pin"),
+      },
+      {
+        label: `Archive ${count} chat${suffix}`,
+        enabled: canArchive,
+        click: () => finish("archive"),
+      },
+      {
+        label: `Open ${count} mini window${suffix}`,
+        click: () => finish("mini-window"),
+      },
+    ]);
+
+    menu.popup({
+      window: win,
+      x,
+      y,
+      callback: () => finish(null),
+    });
+  });
 }
 
 function createProjectLabelService(api) {
