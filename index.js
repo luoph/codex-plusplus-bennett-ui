@@ -165,7 +165,7 @@ function renderSettings(root, state) {
       id: "show-pinned-chat-project-names",
       title: "Show project label for pinned chats",
       description:
-        "Show a smaller, subdued project name under pinned chats in the sidebar.",
+        "Show a smaller, subdued project label under pinned chats, and under all chats in chronological list mode.",
     },
   ];
 
@@ -1638,16 +1638,18 @@ const FEATURES = {
   },
 
   /**
-   * Show a small project label under pinned sidebar chats. Codex's sidebar
-   * row data tells us the thread id; the main process maps that id back to
-   * the local session cwd from Codex's JSONL metadata.
+   * Show a small project label under pinned sidebar chats. When Codex's
+   * sidebar is organized as a chronological list, show it under every local
+   * chat because project grouping is no longer visible.
    */
   "show-pinned-chat-project-names"(api) {
     const STYLE_ID = "codexpp-pinned-chat-project-names";
     const ATTR = "data-codexpp-pinned-chat-project-name";
     const ROW_ATTR = "data-codexpp-pinned-chat-project-name-row";
-    const GAP_ATTR = "data-codexpp-pinned-chat-project-name-gap";
+    const CONTENT_ATTR = "data-codexpp-pinned-chat-project-name-content";
+    const COMPACT_ATTR = "data-codexpp-pinned-chat-project-name-compact-row";
     const COLOR_STORAGE_KEY = "sidebar-project-backgrounds:colors";
+    const ORGANIZE_MODE_KEY = "codex:persisted-atom:sidebar-organize-mode-v1";
     const ASIDE_SELECTOR =
       "aside.pointer-events-auto.relative.flex.overflow-hidden";
     const labels = new Map();
@@ -1662,9 +1664,12 @@ const FEATURES = {
       [${ATTR}="label"] {
         display: flex !important;
         align-items: center !important;
-        gap: 0.375rem !important;
-        margin: -3px 0 0 0 !important;
-        max-width: 100% !important;
+        gap: 0 !important;
+        position: absolute !important;
+        left: var(--codexpp-pinned-chat-project-label-left, 2rem) !important;
+        right: var(--codexpp-pinned-chat-project-label-right, 2rem) !important;
+        bottom: 0.1875rem !important;
+        max-width: none !important;
         min-width: 0 !important;
         overflow: visible !important;
         color: var(--color-token-text-secondary, currentColor) !important;
@@ -1683,6 +1688,10 @@ const FEATURES = {
         background-color: var(--codexpp-pinned-chat-project-color, currentColor) !important;
       }
 
+      [${ATTR}="label"]:has([${ATTR}="dot"]) {
+        gap: 0.375rem !important;
+      }
+
       [${ATTR}="label-text"] {
         display: block !important;
         min-width: 0 !important;
@@ -1692,39 +1701,81 @@ const FEATURES = {
         white-space: nowrap !important;
       }
 
-      [${ATTR}="title-stack"] {
-        display: flex !important;
-        min-width: 0 !important;
-        max-width: 100% !important;
-        flex: 1 1 auto !important;
-        flex-direction: column !important;
-        align-items: stretch !important;
-        justify-content: center !important;
-        gap: 0 !important;
-        padding: 2px 0 !important;
+      [${CONTENT_ATTR}="true"] {
+        position: relative !important;
+        transform: translateY(-0.3125rem) !important;
       }
 
-      [${ATTR}="title"] {
-        display: block !important;
-        min-width: 0 !important;
-        max-width: 100% !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
+      [${COMPACT_ATTR}="true"] [${CONTENT_ATTR}="true"] > .w-4:first-child {
+        align-items: center !important;
+        display: flex !important;
+        height: 100% !important;
+        justify-content: center !important;
+        position: absolute !important;
+        left: -0.25rem !important;
+        top: 0.3125rem !important;
+        width: 1.5rem !important;
+        z-index: 20 !important;
+        transform: none !important;
+      }
+
+      [${COMPACT_ATTR}="true"] [${CONTENT_ATTR}="true"] > .w-4:first-child button {
+        align-items: center !important;
+        border: 1px solid transparent !important;
+        border-radius: 9999px !important;
+        color: var(--color-token-muted-foreground, currentColor) !important;
+        cursor: var(--cursor-interaction, pointer) !important;
+        display: flex !important;
+        gap: 0.25rem !important;
+        height: 1.25rem !important;
+        justify-content: center !important;
+        opacity: 0.5 !important;
+        padding: 0 !important;
+        pointer-events: auto !important;
+        user-select: none !important;
         white-space: nowrap !important;
+        width: 1.25rem !important;
+      }
+
+      [${COMPACT_ATTR}="true"] [${CONTENT_ATTR}="true"] > .w-4:first-child button:hover,
+      [${COMPACT_ATTR}="true"] [${CONTENT_ATTR}="true"] > .w-4:first-child button:focus-visible {
+        color: var(--color-token-foreground, currentColor) !important;
+        opacity: 1 !important;
+      }
+
+      [${COMPACT_ATTR}="true"] [${CONTENT_ATTR}="true"] > .w-4:first-child button > svg {
+        height: 1rem !important;
+        width: 1rem !important;
+      }
+
+      [${COMPACT_ATTR}="true"] [${CONTENT_ATTR}="true"] > .w-4:first-child + div {
+        margin-left: 0.125rem !important;
+        padding-left: 0 !important;
+      }
+
+      [${COMPACT_ATTR}="true"] [${CONTENT_ATTR}="true"] > .w-4:first-child + div > div {
+        padding-right: 0.75rem !important;
+      }
+
+      [${COMPACT_ATTR}="true"]:hover [${CONTENT_ATTR}="true"] > .w-4:first-child + div > div,
+      [${COMPACT_ATTR}="true"]:focus-within [${CONTENT_ATTR}="true"] > .w-4:first-child + div > div {
+        -webkit-mask-image: linear-gradient(to right, transparent 0, transparent 21px, black 26px) !important;
+        mask-image: linear-gradient(to right, transparent 0, transparent 21px, black 26px) !important;
+      }
+
+      [${COMPACT_ATTR}="true"]:hover > [${ATTR}="label"],
+      [${COMPACT_ATTR}="true"]:focus-within > [${ATTR}="label"] {
+        -webkit-mask-image: linear-gradient(to right, transparent 0, transparent 21px, black 26px) !important;
+        mask-image: linear-gradient(to right, transparent 0, transparent 21px, black 26px) !important;
       }
 
       [${ROW_ATTR}="true"] {
         --padding-row-y: 0 !important;
         box-sizing: border-box !important;
-        height: 2.5rem !important;
-        min-height: 2.5rem !important;
+        height: 2.375rem !important;
+        min-height: 2.375rem !important;
         padding-top: 0 !important;
         padding-bottom: 0 !important;
-      }
-
-      [${GAP_ATTR}="true"] {
-        margin-top: 0 !important;
-        margin-bottom: 0 !important;
       }
     `;
     document.head.appendChild(style);
@@ -1747,6 +1798,46 @@ const FEATURES = {
         .replace(/^file:\/\//, "")
         .replace(/[\\/]+$/, "")
         .toLowerCase();
+
+    const sidebarOrganizeMode = () => {
+      try {
+        const raw = window.localStorage?.getItem(ORGANIZE_MODE_KEY);
+        if (!raw) return null;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return raw;
+        }
+      } catch {
+        return null;
+      }
+    };
+
+    const hasVisibleProjectRows = (sidebar) =>
+      Array.from(sidebar.querySelectorAll(
+        "[data-app-action-sidebar-project-row], div[role='listitem'].group\\/cwd",
+      )).some((node) => node instanceof HTMLElement && node.getBoundingClientRect().height > 0);
+
+    const hasThreadRows = (sidebar) =>
+      Boolean(sidebar.querySelector(
+        [
+          "[data-app-action-sidebar-thread-row]",
+          "[data-app-action-sidebar-thread-id]",
+          "[data-app-action-sidebar-task-id]",
+          "[data-sidebar-thread-id]",
+        ].join(", "),
+      ));
+
+    const hasAllChatsSection = (sidebar) =>
+      Boolean(sidebar.querySelector('[data-app-action-sidebar-section-heading="All chats"]'));
+
+    const isChronologicalList = (sidebar = mainSidebar()) => {
+      if (sidebar && hasAllChatsSection(sidebar)) return true;
+      const mode = sidebarOrganizeMode();
+      if (mode === "all") return true;
+      if (mode === "project") return false;
+      return Boolean(sidebar && hasThreadRows(sidebar) && !hasVisibleProjectRows(sidebar));
+    };
 
     const projectInfoFor = (record) => {
       const fallbackLabel = typeof record === "string" ? record : record?.label;
@@ -1851,18 +1942,24 @@ const FEATURES = {
         "data-app-action-sidebar-task-kind",
         "data-sidebar-thread-kind",
       ]);
-      if (!id || String(pinned) !== "true" || (kind && kind !== "local")) {
+      const isPinned = String(pinned) === "true";
+      if (!id || (kind && kind !== "local")) {
         return null;
       }
-      return { id: normalizeThreadId(id) };
+      return { id: normalizeThreadId(id), pinned: isPinned };
     };
 
-    const pinnedThreadRows = () => {
+    const threadRows = () => {
       const sidebar = mainSidebar();
       if (!sidebar) return [];
+      const includeAllLocalChats = isChronologicalList(sidebar);
       const rows = new Map();
       const candidates = sidebar.querySelectorAll(
         [
+          "[data-app-action-sidebar-thread-row]",
+          "[data-app-action-sidebar-thread-id]",
+          "[data-app-action-sidebar-task-id]",
+          "[data-sidebar-thread-id]",
           "[data-app-action-sidebar-thread-pinned]",
           "[data-app-action-sidebar-task-pinned]",
           "[data-sidebar-thread-pinned]",
@@ -1873,6 +1970,10 @@ const FEATURES = {
         if (!(node instanceof HTMLElement)) continue;
         const source = threadMeta(node) ? node : node.querySelector?.(
           [
+            "[data-app-action-sidebar-thread-row]",
+            "[data-app-action-sidebar-thread-id]",
+            "[data-app-action-sidebar-task-id]",
+            "[data-sidebar-thread-id]",
             "[data-app-action-sidebar-thread-pinned]",
             "[data-app-action-sidebar-task-pinned]",
             "[data-sidebar-thread-pinned]",
@@ -1880,12 +1981,12 @@ const FEATURES = {
         );
         const meta = threadMeta(source);
         if (!meta?.id) continue;
+        if (!meta.pinned && !includeAllLocalChats) continue;
         const row = source.closest("[role='listitem']") || source;
         const host = source instanceof HTMLElement ? source : row;
         if (row instanceof HTMLElement && host instanceof HTMLElement) {
           const title = findThreadTitle(host, row);
-          const mount = titleMount(title, host);
-          rows.set(meta.id, { row, host, title, mount, id: meta.id });
+          rows.set(meta.id, { row, host, title, id: meta.id, pinned: meta.pinned });
         }
       }
       return Array.from(rows.values());
@@ -1911,19 +2012,6 @@ const FEATURES = {
       return Array.from(host.querySelectorAll("span, div"))
         .filter((node) => node instanceof HTMLElement)
         .find((node) => compactText(node.textContent) === compactText(title)) || null;
-    };
-
-    const titleMount = (title, host) => {
-      if (!(title instanceof HTMLElement)) return host;
-      const parent = title.parentElement;
-      if (
-        parent instanceof HTMLElement &&
-        parent !== host &&
-        parent.children.length <= 3
-      ) {
-        return parent;
-      }
-      return title;
     };
 
     const backgroundTargetsFor = (host, row) => {
@@ -1956,6 +2044,28 @@ const FEATURES = {
       }
     };
 
+    const contentTargetFor = (host, title) => {
+      if (!(host instanceof HTMLElement)) return null;
+      if (title instanceof HTMLElement) {
+        for (const child of Array.from(host.children)) {
+          if (child instanceof HTMLElement && child.contains(title)) return child;
+        }
+        return title.parentElement instanceof HTMLElement ? title.parentElement : null;
+      }
+      return host.firstElementChild instanceof HTMLElement ? host.firstElementChild : null;
+    };
+
+    const setLabelInlinePosition = (node, host, title) => {
+      if (!(node instanceof HTMLElement) || !(host instanceof HTMLElement)) return;
+      const anchor = title instanceof HTMLElement ? title : host;
+      const hostRect = host.getBoundingClientRect();
+      const anchorRect = anchor.getBoundingClientRect();
+      const left = Math.max(0, anchorRect.left - hostRect.left);
+      const right = Math.max(0, hostRect.right - anchorRect.right);
+      node.style.setProperty("--codexpp-pinned-chat-project-label-left", `${left}px`);
+      node.style.setProperty("--codexpp-pinned-chat-project-label-right", `${right}px`);
+    };
+
     const removeStaleLabels = (activeRows) => {
       const active = new Set(activeRows.map((item) => item.row));
       document.querySelectorAll(`[${ATTR}="label"]`).forEach((node) => {
@@ -1963,53 +2073,64 @@ const FEATURES = {
         if (!row || !active.has(row)) node.remove();
       });
       document.querySelectorAll(`[${ATTR}="title-stack"], [${ATTR}="title"]`)
+        .forEach((node) => node.removeAttribute(ATTR));
+      document.querySelectorAll(`[${CONTENT_ATTR}="true"]`)
         .forEach((node) => {
           const row = node.closest("[role='listitem']");
-          if (!row || !active.has(row)) node.removeAttribute(ATTR);
+          if (!row || !active.has(row)) {
+            node.removeAttribute(CONTENT_ATTR);
+          }
         });
+      document.querySelectorAll(`[${COMPACT_ATTR}="true"]`).forEach((node) => {
+        const row = node.closest("[role='listitem']");
+        if (!row || !active.has(row)) node.removeAttribute(COMPACT_ATTR);
+      });
       document.querySelectorAll(`[${ROW_ATTR}="true"]`).forEach((node) => {
         const row = node.closest("[role='listitem']");
         if (!row || !active.has(row)) node.removeAttribute(ROW_ATTR);
       });
-      document.querySelectorAll(`[${GAP_ATTR}="true"]`).forEach((node) => {
-        const row = node.closest("[role='listitem']");
-        if (!row || !active.has(row)) node.removeAttribute(GAP_ATTR);
-      });
     };
 
     const renderLabels = () => {
-      const rows = pinnedThreadRows();
+      const rows = threadRows();
+      const showAllLocalChats = isChronologicalList();
       removeStaleLabels(rows);
-      for (const { row, host, title, mount, id } of rows) {
+      for (const { row, host, title, id, pinned } of rows) {
         const record = labels.get(id);
         const info = projectInfoFor(record);
         const label = info.label;
-        const target = mount instanceof HTMLElement ? mount : host;
+        const target = host instanceof HTMLElement ? host : row;
         const existing = target.querySelector(`[${ATTR}="label"]`);
+        const contentTarget = contentTargetFor(target, title);
         if (!label) {
           existing?.remove();
           title?.removeAttribute(ATTR);
           target.removeAttribute(ATTR);
+          contentTarget?.removeAttribute(CONTENT_ATTR);
+          target.removeAttribute(COMPACT_ATTR);
           reconcileRowPaddingTargets(row, []);
-          row.removeAttribute(GAP_ATTR);
           continue;
         }
-        row.setAttribute(GAP_ATTR, "true");
         const paddingTargets = backgroundTargetsFor(host, row);
         reconcileRowPaddingTargets(row, paddingTargets);
         paddingTargets.forEach((node) =>
           node.setAttribute(ROW_ATTR, "true"),
         );
-        if (title instanceof HTMLElement && title !== target) {
-          title.setAttribute(ATTR, "title");
+        title?.removeAttribute(ATTR);
+        target.removeAttribute(ATTR);
+        if (showAllLocalChats && !pinned) {
+          target.setAttribute(COMPACT_ATTR, "true");
+        } else {
+          target.removeAttribute(COMPACT_ATTR);
         }
-        target.setAttribute(ATTR, "title-stack");
+        contentTarget?.setAttribute(CONTENT_ATTR, "true");
         const node = existing instanceof HTMLElement
           ? existing
           : document.createElement("div");
         node.setAttribute(ATTR, "label");
+        setLabelInlinePosition(node, target, title);
         node.style.setProperty("--codexpp-pinned-chat-project-color", info.color);
-        const showDot = readFlag(api, "sidebar-project-backgrounds", true);
+        const showDot = readFlag(api, "sidebar-project-backgrounds", true) && !showAllLocalChats;
         let dot = node.querySelector(`[${ATTR}="dot"]`);
         if (!showDot) {
           dot?.remove();
@@ -2034,7 +2155,7 @@ const FEATURES = {
     };
 
     const refreshLabels = async (force = false) => {
-      const rows = pinnedThreadRows();
+      const rows = threadRows();
       const ids = rows.map((row) => row.id);
       if (ids.length === 0) {
         removeStaleLabels([]);
@@ -2084,6 +2205,7 @@ const FEATURES = {
     observer.observe(document.body, { childList: true, subtree: true });
     const interval = window.setInterval(() => refreshLabels(true), 60_000);
     window.addEventListener("focus", scheduleApply);
+    window.addEventListener("storage", scheduleApply);
     window.addEventListener("codexpp-ui-improvements-setting-changed", scheduleApply);
     document.addEventListener("visibilitychange", scheduleApply);
 
@@ -2094,13 +2216,15 @@ const FEATURES = {
       observer.disconnect();
       window.clearInterval(interval);
       window.removeEventListener("focus", scheduleApply);
+      window.removeEventListener("storage", scheduleApply);
       window.removeEventListener("codexpp-ui-improvements-setting-changed", scheduleApply);
       document.removeEventListener("visibilitychange", scheduleApply);
       document.querySelectorAll(`[${ATTR}="label"]`).forEach((node) => node.remove());
-      document.querySelectorAll(`[${ATTR}], [${ROW_ATTR}="true"], [${GAP_ATTR}="true"]`).forEach((node) => {
+      document.querySelectorAll(`[${ATTR}], [${ROW_ATTR}="true"], [${CONTENT_ATTR}="true"], [${COMPACT_ATTR}="true"]`).forEach((node) => {
         node.removeAttribute?.(ATTR);
         node.removeAttribute?.(ROW_ATTR);
-        node.removeAttribute?.(GAP_ATTR);
+        node.removeAttribute?.(CONTENT_ATTR);
+        node.removeAttribute?.(COMPACT_ATTR);
       });
       style.remove();
     };
