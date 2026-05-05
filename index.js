@@ -25,6 +25,8 @@
  *                          grid of filled buttons.
  *  • sidebar-project-backgrounds  Add subtle grouped backgrounds behind
  *                                 project rows in the main sidebar.
+ *  • show-pinned-chat-project-names  Shows a small project name under
+ *                                    pinned sidebar chats.
  *  • show-message-metrics-on-hover  Shows Codex token metrics beside
  *                                   assistant messages on hover.
  *
@@ -42,6 +44,7 @@ module.exports = {
     if (api.process === "main") {
       startMainMetricsProvider(api);
       startMainUsageProvider(api);
+      startMainProjectLabelProvider(api);
       return;
     }
 
@@ -56,6 +59,7 @@ module.exports = {
         "match-sidebar-width": true,
         "sidebar-action-grid": true,
         "sidebar-project-backgrounds": true,
+        "show-pinned-chat-project-names": true,
       },
     };
     this._state = state;
@@ -88,7 +92,7 @@ module.exports = {
     // ── activate features per stored prefs ─────────────────────────────
     for (const id of Object.keys(state.defaults)) {
       const enabled = readFlag(api, id, state.defaults[id]);
-      if (enabled) activateFeature(state, id);
+      if (enabled && FEATURES[id]) activateFeature(state, id);
     }
   },
 
@@ -156,6 +160,12 @@ function renderSettings(root, state) {
       title: "Sidebar project backgrounds",
       description:
         "Add subtle grouped backgrounds behind project rows so adjacent projects are easier to scan.",
+    },
+    {
+      id: "show-pinned-chat-project-names",
+      title: "Show project label for pinned chats",
+      description:
+        "Show a smaller, subdued project name under pinned chats in the sidebar.",
     },
   ];
 
@@ -264,6 +274,9 @@ function featureRow(state, f) {
   const initial = readFlag(state.api, f.id, state.defaults[f.id]);
   const sw = switchControl(initial, async (next) => {
     writeFlag(state.api, f.id, next);
+    window.dispatchEvent(new CustomEvent("codexpp-ui-improvements-setting-changed", {
+      detail: { id: f.id, value: next },
+    }));
     if (next) activateFeature(state, f.id);
     else deactivateFeature(state, f.id);
   });
@@ -968,6 +981,10 @@ const FEATURES = {
       mounted = renderUsageBox(api, snapshot);
       mounted.dataset.codexpp = "usage-box";
       slot.appendChild(mounted);
+      mounted.style.flex = "0 1 auto";
+      mounted.style.width = "auto";
+      mounted.style.minWidth = "4.75rem";
+      mounted.style.maxWidth = "8.5rem";
       if (slot.dataset.codexppUsageSlot === "settings-inline-windows") {
         mounted.style.width = "auto";
         mounted.style.minWidth = "4.75rem";
@@ -1616,6 +1633,475 @@ const FEATURES = {
       obs.disconnect();
       removeWrapper();
       cleanupMarks();
+      style.remove();
+    };
+  },
+
+  /**
+   * Show a small project label under pinned sidebar chats. Codex's sidebar
+   * row data tells us the thread id; the main process maps that id back to
+   * the local session cwd from Codex's JSONL metadata.
+   */
+  "show-pinned-chat-project-names"(api) {
+    const STYLE_ID = "codexpp-pinned-chat-project-names";
+    const ATTR = "data-codexpp-pinned-chat-project-name";
+    const ROW_ATTR = "data-codexpp-pinned-chat-project-name-row";
+    const GAP_ATTR = "data-codexpp-pinned-chat-project-name-gap";
+    const COLOR_STORAGE_KEY = "sidebar-project-backgrounds:colors";
+    const ASIDE_SELECTOR =
+      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const labels = new Map();
+    let disposed = false;
+    let refreshInFlight = false;
+    let lastRefreshAt = 0;
+
+    document.getElementById(STYLE_ID)?.remove();
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      [${ATTR}="label"] {
+        display: flex !important;
+        align-items: center !important;
+        gap: 0.375rem !important;
+        margin: -3px 0 0 0 !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        overflow: visible !important;
+        color: var(--color-token-text-secondary, currentColor) !important;
+        font-size: 0.6875rem !important;
+        line-height: 0.875rem !important;
+        opacity: 0.75 !important;
+        pointer-events: none !important;
+      }
+
+      [${ATTR}="dot"] {
+        width: 0.375rem !important;
+        height: 0.375rem !important;
+        border-radius: 9999px !important;
+        flex: 0 0 auto !important;
+        margin-left: 1px !important;
+        background-color: var(--codexpp-pinned-chat-project-color, currentColor) !important;
+      }
+
+      [${ATTR}="label-text"] {
+        display: block !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+      }
+
+      [${ATTR}="title-stack"] {
+        display: flex !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        flex: 1 1 auto !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        justify-content: center !important;
+        gap: 0 !important;
+        padding: 2px 0 !important;
+      }
+
+      [${ATTR}="title"] {
+        display: block !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+      }
+
+      [${ROW_ATTR}="true"] {
+        --padding-row-y: 0 !important;
+        box-sizing: border-box !important;
+        height: 2.5rem !important;
+        min-height: 2.5rem !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+      }
+
+      [${GAP_ATTR}="true"] {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+      }
+    `;
+    document.head.appendChild(style);
+
+    const mainSidebar = () => {
+      const aside = document.querySelector(ASIDE_SELECTOR);
+      return aside instanceof HTMLElement ? aside : null;
+    };
+
+    const normalizeThreadId = (value) =>
+      String(value || "")
+        .trim()
+        .replace(/^(local|remote|pending-worktree):/, "");
+
+    const normalizeProjectName = (value) =>
+      String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+    const normalizeProjectPath = (value) =>
+      String(value || "")
+        .replace(/^file:\/\//, "")
+        .replace(/[\\/]+$/, "")
+        .toLowerCase();
+
+    const projectInfoFor = (record) => {
+      const fallbackLabel = typeof record === "string" ? record : record?.label;
+      const cwd = typeof record?.cwd === "string" ? record.cwd : "";
+      const live = liveProjectInfoFor(fallbackLabel, cwd);
+      return {
+        label: live.label || fallbackLabel || "",
+        color: live.color || projectColorFor(live.label || fallbackLabel || ""),
+      };
+    };
+
+    const projectColorFor = (label) => {
+      const key = normalizeProjectName(label);
+      const storedPrefs = api.storage.get(COLOR_STORAGE_KEY, {});
+      const prefs = {
+        ...(storedPrefs && typeof storedPrefs === "object" && !Array.isArray(storedPrefs)
+          ? storedPrefs
+          : {}),
+        ...(window.__codexppSidebarProjectColorPrefs || {}),
+      };
+      const colors = {
+        blue: "var(--color-token-charts-blue, var(--color-token-text-link-foreground))",
+        green: "var(--color-token-charts-green, var(--color-token-text-secondary))",
+        yellow: "var(--color-token-charts-yellow, var(--color-token-text-secondary))",
+        red: "var(--color-token-charts-red, var(--color-token-text-secondary))",
+        pink: "var(--pink-400, var(--color-token-charts-purple, var(--color-token-text-link-foreground)))",
+        purple: "var(--color-token-charts-purple, var(--color-token-text-link-foreground))",
+        gray: "var(--color-token-text-secondary)",
+      };
+      if (colors[prefs[key]]) return colors[prefs[key]];
+
+      const auto = ["blue", "green", "yellow", "red"];
+      let hash = 0;
+      for (let i = 0; i < key.length; i += 1) {
+        hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+      }
+      return colors[auto[hash % auto.length]];
+    };
+
+    const liveProjectInfoFor = (label, cwd) => {
+      const key = normalizeProjectName(label);
+      const pathKey = normalizeProjectPath(cwd);
+      const rows = document.querySelectorAll('[data-codexpp-sidebar-project-backgrounds="row"]');
+      for (const row of rows) {
+        if (!(row instanceof HTMLElement)) continue;
+        const action = row.querySelector("[data-app-action-sidebar-project-id]");
+        const projectPath = action instanceof HTMLElement
+          ? normalizeProjectPath(action.getAttribute("data-app-action-sidebar-project-id"))
+          : "";
+        const rowLabelText =
+          row.getAttribute("aria-label") ||
+            row.getAttribute("title") ||
+            "";
+        const rowLabel = normalizeProjectName(rowLabelText);
+        const pathMatches = pathKey && projectPath && (
+          pathKey === projectPath ||
+          pathKey.startsWith(`${projectPath}/`) ||
+          projectPath.startsWith(`${pathKey}/`)
+        );
+        if (!pathMatches && (!key || rowLabel !== key)) continue;
+        const color =
+          row.style.getPropertyValue("--codexpp-project-tint").trim() ||
+          window.getComputedStyle(row).getPropertyValue("--codexpp-project-tint").trim();
+        return { label: rowLabelText, color };
+      }
+      return { label: "", color: "" };
+    };
+
+    const attrValue = (node, names) => {
+      for (const name of names) {
+        const value = node.getAttribute(name);
+        if (value != null && value !== "") return value;
+      }
+      const suffixes = new Set(names.map((name) => name.split("-").at(-1)));
+      for (const attr of Array.from(node.attributes || [])) {
+        const name = attr.name.toLowerCase();
+        if (!name.includes("sidebar") || !name.includes("thread")) continue;
+        if (
+          names.some((expected) => name.endsWith(expected.replace(/^data-/, ""))) ||
+          Array.from(suffixes).some((suffix) => name.endsWith(`-${suffix}`))
+        ) {
+          return attr.value;
+        }
+      }
+      return null;
+    };
+
+    const threadMeta = (node) => {
+      if (!(node instanceof HTMLElement)) return null;
+      const id = attrValue(node, [
+        "data-app-action-sidebar-thread-id",
+        "data-app-action-sidebar-task-id",
+        "data-sidebar-thread-id",
+      ]);
+      const pinned = attrValue(node, [
+        "data-app-action-sidebar-thread-pinned",
+        "data-app-action-sidebar-task-pinned",
+        "data-sidebar-thread-pinned",
+      ]);
+      const kind = attrValue(node, [
+        "data-app-action-sidebar-thread-kind",
+        "data-app-action-sidebar-task-kind",
+        "data-sidebar-thread-kind",
+      ]);
+      if (!id || String(pinned) !== "true" || (kind && kind !== "local")) {
+        return null;
+      }
+      return { id: normalizeThreadId(id) };
+    };
+
+    const pinnedThreadRows = () => {
+      const sidebar = mainSidebar();
+      if (!sidebar) return [];
+      const rows = new Map();
+      const candidates = sidebar.querySelectorAll(
+        [
+          "[data-app-action-sidebar-thread-pinned]",
+          "[data-app-action-sidebar-task-pinned]",
+          "[data-sidebar-thread-pinned]",
+          "[role='listitem']",
+        ].join(", "),
+      );
+      for (const node of candidates) {
+        if (!(node instanceof HTMLElement)) continue;
+        const source = threadMeta(node) ? node : node.querySelector?.(
+          [
+            "[data-app-action-sidebar-thread-pinned]",
+            "[data-app-action-sidebar-task-pinned]",
+            "[data-sidebar-thread-pinned]",
+          ].join(", "),
+        );
+        const meta = threadMeta(source);
+        if (!meta?.id) continue;
+        const row = source.closest("[role='listitem']") || source;
+        const host = source instanceof HTMLElement ? source : row;
+        if (row instanceof HTMLElement && host instanceof HTMLElement) {
+          const title = findThreadTitle(host, row);
+          const mount = titleMount(title, host);
+          rows.set(meta.id, { row, host, title, mount, id: meta.id });
+        }
+      }
+      return Array.from(rows.values());
+    };
+
+    const findThreadTitle = (host, row) => {
+      const selectors = [
+        "[data-thread-title]",
+        "[data-app-action-sidebar-thread-title]",
+        "[data-app-action-sidebar-task-title]",
+      ];
+      for (const selector of selectors) {
+        const node = host.querySelector(selector) || row.querySelector(selector);
+        if (node instanceof HTMLElement) return node;
+      }
+
+      const title = attrValue(host, [
+        "data-app-action-sidebar-thread-title",
+        "data-app-action-sidebar-task-title",
+        "data-sidebar-thread-title",
+      ]);
+      if (!title) return null;
+      return Array.from(host.querySelectorAll("span, div"))
+        .filter((node) => node instanceof HTMLElement)
+        .find((node) => compactText(node.textContent) === compactText(title)) || null;
+    };
+
+    const titleMount = (title, host) => {
+      if (!(title instanceof HTMLElement)) return host;
+      const parent = title.parentElement;
+      if (
+        parent instanceof HTMLElement &&
+        parent !== host &&
+        parent.children.length <= 3
+      ) {
+        return parent;
+      }
+      return title;
+    };
+
+    const backgroundTargetsFor = (host, row) => {
+      const interactive = host?.closest?.(
+        [
+          "[role='button']",
+          "a",
+          "button",
+          "[class*='hover:bg-token-list-hover-background']",
+          "[class*='bg-token-list-selected-background']",
+          "[class*='bg-token-list-hover-background']",
+        ].join(", "),
+      );
+      if (interactive instanceof HTMLElement && row?.contains?.(interactive)) {
+        return [interactive];
+      }
+      return host instanceof HTMLElement ? [host] : [];
+    };
+
+    const reconcileRowPaddingTargets = (row, targets) => {
+      const active = new Set(targets);
+      const marked = [
+        row,
+        ...Array.from(row?.querySelectorAll?.(`[${ROW_ATTR}="true"]`) || []),
+      ];
+      for (const node of marked) {
+        if (node instanceof HTMLElement && !active.has(node)) {
+          node.removeAttribute(ROW_ATTR);
+        }
+      }
+    };
+
+    const removeStaleLabels = (activeRows) => {
+      const active = new Set(activeRows.map((item) => item.row));
+      document.querySelectorAll(`[${ATTR}="label"]`).forEach((node) => {
+        const row = node.closest("[role='listitem']");
+        if (!row || !active.has(row)) node.remove();
+      });
+      document.querySelectorAll(`[${ATTR}="title-stack"], [${ATTR}="title"]`)
+        .forEach((node) => {
+          const row = node.closest("[role='listitem']");
+          if (!row || !active.has(row)) node.removeAttribute(ATTR);
+        });
+      document.querySelectorAll(`[${ROW_ATTR}="true"]`).forEach((node) => {
+        const row = node.closest("[role='listitem']");
+        if (!row || !active.has(row)) node.removeAttribute(ROW_ATTR);
+      });
+      document.querySelectorAll(`[${GAP_ATTR}="true"]`).forEach((node) => {
+        const row = node.closest("[role='listitem']");
+        if (!row || !active.has(row)) node.removeAttribute(GAP_ATTR);
+      });
+    };
+
+    const renderLabels = () => {
+      const rows = pinnedThreadRows();
+      removeStaleLabels(rows);
+      for (const { row, host, title, mount, id } of rows) {
+        const record = labels.get(id);
+        const info = projectInfoFor(record);
+        const label = info.label;
+        const target = mount instanceof HTMLElement ? mount : host;
+        const existing = target.querySelector(`[${ATTR}="label"]`);
+        if (!label) {
+          existing?.remove();
+          title?.removeAttribute(ATTR);
+          target.removeAttribute(ATTR);
+          reconcileRowPaddingTargets(row, []);
+          row.removeAttribute(GAP_ATTR);
+          continue;
+        }
+        row.setAttribute(GAP_ATTR, "true");
+        const paddingTargets = backgroundTargetsFor(host, row);
+        reconcileRowPaddingTargets(row, paddingTargets);
+        paddingTargets.forEach((node) =>
+          node.setAttribute(ROW_ATTR, "true"),
+        );
+        if (title instanceof HTMLElement && title !== target) {
+          title.setAttribute(ATTR, "title");
+        }
+        target.setAttribute(ATTR, "title-stack");
+        const node = existing instanceof HTMLElement
+          ? existing
+          : document.createElement("div");
+        node.setAttribute(ATTR, "label");
+        node.style.setProperty("--codexpp-pinned-chat-project-color", info.color);
+        const showDot = readFlag(api, "sidebar-project-backgrounds", true);
+        let dot = node.querySelector(`[${ATTR}="dot"]`);
+        if (!showDot) {
+          dot?.remove();
+          dot = null;
+        } else if (!(dot instanceof HTMLElement)) {
+          dot = document.createElement("span");
+          dot.setAttribute(ATTR, "dot");
+        }
+        let text = node.querySelector(`[${ATTR}="label-text"]`);
+        if (!(text instanceof HTMLElement)) {
+          text = document.createElement("span");
+          text.setAttribute(ATTR, "label-text");
+        }
+        if (text.textContent !== label) text.textContent = label;
+        if (showDot && dot && (dot.parentElement !== node || text.parentElement !== node)) {
+          node.replaceChildren(dot, text);
+        } else if (!showDot && (text.parentElement !== node || node.children.length !== 1)) {
+          node.replaceChildren(text);
+        }
+        if (!node.parentElement) target.appendChild(node);
+      }
+    };
+
+    const refreshLabels = async (force = false) => {
+      const rows = pinnedThreadRows();
+      const ids = rows.map((row) => row.id);
+      if (ids.length === 0) {
+        removeStaleLabels([]);
+        return;
+      }
+      const now = Date.now();
+      if (!force && (refreshInFlight || now - lastRefreshAt < 10_000)) {
+        renderLabels();
+        return;
+      }
+      refreshInFlight = true;
+      lastRefreshAt = now;
+      try {
+        const next = await api.ipc.invoke("pinned-chat-project-labels", ids);
+        if (next && typeof next === "object") {
+          labels.clear();
+          for (const [id, value] of Object.entries(next)) {
+            if (typeof value === "string" && value.trim()) {
+              labels.set(normalizeThreadId(id), { label: value.trim(), cwd: "" });
+            } else if (value && typeof value === "object") {
+              const label = typeof value.label === "string" ? value.label.trim() : "";
+              const cwd = typeof value.cwd === "string" ? value.cwd : "";
+              if (label) labels.set(normalizeThreadId(id), { label, cwd });
+            }
+          }
+        }
+      } catch (e) {
+        api.log.warn("[pinned-chat-project-names] labels unavailable", e);
+      } finally {
+        refreshInFlight = false;
+        if (!disposed) renderLabels();
+      }
+    };
+
+    let scheduled = false;
+    const scheduleApply = () => {
+      if (scheduled || disposed) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        refreshLabels();
+      });
+    };
+
+    refreshLabels(true);
+    const observer = new MutationObserver(scheduleApply);
+    observer.observe(document.body, { childList: true, subtree: true });
+    const interval = window.setInterval(() => refreshLabels(true), 60_000);
+    window.addEventListener("focus", scheduleApply);
+    window.addEventListener("codexpp-ui-improvements-setting-changed", scheduleApply);
+    document.addEventListener("visibilitychange", scheduleApply);
+
+    api.log.info("pinned chat project names active");
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      window.clearInterval(interval);
+      window.removeEventListener("focus", scheduleApply);
+      window.removeEventListener("codexpp-ui-improvements-setting-changed", scheduleApply);
+      document.removeEventListener("visibilitychange", scheduleApply);
+      document.querySelectorAll(`[${ATTR}="label"]`).forEach((node) => node.remove());
+      document.querySelectorAll(`[${ATTR}], [${ROW_ATTR}="true"], [${GAP_ATTR}="true"]`).forEach((node) => {
+        node.removeAttribute?.(ATTR);
+        node.removeAttribute?.(ROW_ATTR);
+        node.removeAttribute?.(GAP_ATTR);
+      });
       style.remove();
     };
   },
@@ -2611,6 +3097,8 @@ const METRICS_GLOBAL_KEY = "__bennettUiImprovementsMessageMetrics";
 const METRICS_HANDLER_KEY = "__bennettUiImprovementsMessageMetricsHandler";
 const USAGE_GLOBAL_KEY = "__bennettUiImprovementsUsageService";
 const USAGE_HANDLER_KEY = "__bennettUiImprovementsUsageHandler";
+const PROJECT_LABEL_GLOBAL_KEY = "__bennettUiImprovementsProjectLabels";
+const PROJECT_LABEL_HANDLER_KEY = "__bennettUiImprovementsProjectLabelsHandler";
 
 function startMainMetricsProvider(api) {
   const service = createMetricsService(api);
@@ -2643,6 +3131,109 @@ function startMainUsageProvider(api) {
   }
 
   api.log.info("[usage] main provider active");
+}
+
+function startMainProjectLabelProvider(api) {
+  const service = createProjectLabelService(api);
+  globalThis[PROJECT_LABEL_GLOBAL_KEY] = service;
+
+  if (!globalThis[PROJECT_LABEL_HANDLER_KEY]) {
+    api.ipc.handle("pinned-chat-project-labels", (_ids = []) => {
+      const active = globalThis[PROJECT_LABEL_GLOBAL_KEY];
+      return active?.getLabels?.(_ids) || {};
+    });
+    globalThis[PROJECT_LABEL_HANDLER_KEY] = true;
+  }
+
+  api.log.info("[pinned-chat-project-names] main provider active");
+}
+
+function createProjectLabelService(api) {
+  let cache = { at: 0, labels: new Map() };
+  const TTL_MS = 30_000;
+
+  return {
+    getLabels(ids) {
+      const requested = Array.isArray(ids)
+        ? ids.map(normalizeConversationId).filter(Boolean)
+        : [];
+      if (requested.length === 0) return {};
+      const now = Date.now();
+      if (now - cache.at > TTL_MS) {
+        try {
+          cache = { at: now, labels: readConversationProjectLabels() };
+        } catch (e) {
+          api.log.warn("[pinned-chat-project-names] scan failed", e);
+          cache = { at: now, labels: new Map() };
+        }
+      }
+      const out = {};
+      for (const id of requested) {
+        const record = cache.labels.get(id);
+        if (record) out[id] = record;
+      }
+      return out;
+    },
+  };
+}
+
+function readConversationProjectLabels() {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const home = process.env.HOME || require("node:os").homedir();
+  const roots = [
+    path.join(home, ".codex", "sessions"),
+    path.join(home, ".codex", "archived_sessions"),
+  ];
+  const files = [];
+  for (const root of roots) collectJsonlFiles(fs, root, files);
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  const labels = new Map();
+  for (const file of files.slice(0, 5000)) {
+    const meta = readSessionMeta(fs, file.path);
+    const id = normalizeConversationId(meta?.id);
+    const cwd = typeof meta?.cwd === "string" ? meta.cwd : null;
+    if (!id || !cwd || labels.has(id)) continue;
+    const label = projectLabelForPath(path, cwd);
+    if (label) labels.set(id, { label, cwd });
+  }
+  return labels;
+}
+
+function readSessionMeta(fs, file) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, "r");
+    const buffer = Buffer.alloc(64 * 1024);
+    const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const firstLine = buffer.toString("utf8", 0, bytes).split("\n")[0];
+    if (!firstLine) return null;
+    const row = JSON.parse(firstLine);
+    return row?.type === "session_meta" ? row.payload : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd != null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Ignore close errors during best-effort sidebar labeling.
+      }
+    }
+  }
+}
+
+function projectLabelForPath(path, cwd) {
+  const normalized = String(cwd || "").replace(/[\\/]+$/, "");
+  if (!normalized || normalized === "~") return null;
+  return path.basename(normalized) || normalized;
+}
+
+function normalizeConversationId(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  return text.replace(/^(local|remote|pending-worktree):/, "");
 }
 
 function createUsageService(api) {
@@ -3007,14 +3598,14 @@ function renderUsageBox(api, snapshot) {
   btn.type = "button";
   // Keep alignment consistent with the row that hosted the upgrade pill.
   btn.className =
-    "flex w-full min-w-0 items-center justify-between gap-2 rounded-md border border-token-border " +
+    "flex w-auto min-w-0 shrink-0 items-center justify-between gap-2 rounded-md border border-token-border " +
     "px-2 py-1 text-xs cursor-interaction transition-colors " +
     "hover:bg-token-foreground/10";
 
   const left = document.createElement("span");
-  left.className = "truncate";
+  left.className = "min-w-0 truncate";
   const right = document.createElement("span");
-  right.className = "tabular-nums flex items-center gap-1";
+  right.className = "shrink-0 tabular-nums flex items-center gap-1";
 
   btn.append(left, right);
 

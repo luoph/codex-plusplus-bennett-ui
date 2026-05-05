@@ -10,6 +10,7 @@ Codex++ tweak with small quality-of-life UI improvements for the Codex desktop a
 - Square/match sidebar styling
 - Compact sidebar action grid
 - Project row backgrounds and color theming
+- Project names under pinned chats, with optional project color dots
 
 ## Install
 
@@ -24,4 +25,3 @@ Then reload tweaks from Codex++.
 ## Manifest
 
 Tweak id: `co.bennett.ui-improvements`
-
