@@ -1461,10 +1461,24 @@ const FEATURES = {
         [data-list-navigation-item="true"][aria-selected="true"] {
         background-color: color-mix(
           in srgb,
-          var(--color-token-text-primary) 11%,
+          var(--color-token-text-primary, currentColor) 11%,
           transparent
         ) !important;
         color: var(--color-token-text-primary) !important;
+        opacity: 1 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][${FAVORITE_CLONE_ATTR}="true"]:hover,
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][${FAVORITE_CLONE_ATTR}="true"][aria-selected="true"] {
+        background-color: color-mix(
+          in srgb,
+          var(--color-token-text-primary, currentColor) 10%,
+          transparent
+        ) !important;
         opacity: 1 !important;
       }
 
@@ -2477,10 +2491,12 @@ const FEATURES = {
       );
     };
 
-    const selectNavigationRow = (scroller, row) => {
+    const selectNavigationRow = (scroller, row, options = {}) => {
       if (!(row instanceof HTMLElement)) return;
       const menu = scroller.closest(`[${MENU_ATTR}="true"]`);
-      menu?.setAttribute(INPUT_MODE_ATTR, "keyboard");
+      if (options.inputMode !== false) {
+        menu?.setAttribute(INPUT_MODE_ATTR, options.inputMode || "keyboard");
+      }
       navigationRows(scroller).forEach((item) =>
         item.setAttribute("aria-selected", item === row ? "true" : "false"),
       );
@@ -2494,7 +2510,7 @@ const FEATURES = {
       if (scroller.closest(`[${MENU_ATTR}="true"]`)?.hasAttribute(HOVER_SUPPRESS_ATTR)) return;
       const firstFavorite = favoriteRows(scroller)[0];
       if (!(firstFavorite instanceof HTMLElement)) return;
-      selectNavigationRow(scroller, firstFavorite);
+      selectNavigationRow(scroller, firstFavorite, { inputMode: false });
       scroller.dataset.codexppSlashFavoriteSelectionReady = "true";
       const keepFavoriteSelected = () => {
         if (!scroller.isConnected) return;
@@ -2887,7 +2903,12 @@ const FEATURES = {
       if (!pointerHandlers.has(scroller)) {
         const handler = (event) => {
           if (menu.hasAttribute(PROGRAM_SCROLL_ATTR)) return;
-          if (event.type === "pointermove") return;
+          if (event.type === "pointermove") {
+            if (!menu.hasAttribute(HOVER_SUPPRESS_ATTR)) {
+              menu.setAttribute(INPUT_MODE_ATTR, "pointer");
+            }
+            return;
+          }
           menu.setAttribute(INPUT_MODE_ATTR, "pointer");
         };
         scroller.addEventListener("pointermove", handler, { passive: true });
@@ -3805,8 +3826,11 @@ const FEATURES = {
   "match-sidebar-width"(api) {
     const STYLE_ID = "codexpp-match-sidebar-width";
     const STORAGE_KEY = "match-sidebar-width:last";
-    const ASIDE_SELECTOR =
-      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
     const SETTINGS_SIDEBAR_SELECTOR =
       ".window-fx-sidebar-surface.w-token-sidebar";
     const MIN_EXPANDED_WIDTH = 240;
@@ -4048,7 +4072,11 @@ const FEATURES = {
 
     const findMainSidebar = () => {
       const aside = document.querySelector(
-        "aside.pointer-events-auto.relative.flex.overflow-hidden",
+        [
+          "aside.pointer-events-auto.relative.flex.overflow-hidden",
+          "aside.pointer-events-auto.relative.flex.overflow-visible",
+          "aside.pointer-events-auto.relative.flex",
+        ].join(", "),
       );
       if (aside instanceof HTMLElement) return aside;
       return null;
@@ -4359,8 +4387,11 @@ const FEATURES = {
     const SELECTED_ATTR = "data-codexpp-sidebar-chat-selected";
     const TARGET_ATTR = "data-codexpp-sidebar-chat-selected-target";
     const MENU_ATTR = "data-codexpp-sidebar-chat-multi-select-menu";
-    const ASIDE_SELECTOR =
-      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
     const THREAD_SELECTOR = [
       "[data-app-action-sidebar-thread-row]",
       "[data-app-action-sidebar-thread-id]",
@@ -4823,8 +4854,11 @@ const FEATURES = {
     const COMPACT_ATTR = "data-codexpp-pinned-chat-project-name-compact-row";
     const COLOR_STORAGE_KEY = "sidebar-project-backgrounds:colors";
     const ORGANIZE_MODE_KEY = "codex:persisted-atom:sidebar-organize-mode-v1";
-    const ASIDE_SELECTOR =
-      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
     const labels = new Map();
     let disposed = false;
     let refreshInFlight = false;
@@ -5419,8 +5453,11 @@ const FEATURES = {
     const ATTR = "data-codexpp-sidebar-project-backgrounds";
     const MENU_ATTR = "data-codexpp-sidebar-project-color-menu";
     const COLOR_STORAGE_KEY = "sidebar-project-backgrounds:colors";
-    const ASIDE_SELECTOR =
-      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
     const EXCLUDED_LABELS = new Set([
       "account",
       "automations",
@@ -5602,6 +5639,8 @@ const FEATURES = {
       }
 
       aside.pointer-events-auto.relative.flex.overflow-hidden
+        [role="button"].hover\\:bg-token-list-hover-background:not(.group\\/folder-row),
+      aside.pointer-events-auto.relative.flex.overflow-visible
         [role="button"].hover\\:bg-token-list-hover-background:not(.group\\/folder-row) {
         margin-inline: 4px !important;
         width: calc(100% - 8px) !important;
@@ -6230,14 +6269,28 @@ const FEATURES = {
     };
 
     let scheduled = false;
+    let scheduleFrame = 0;
+    let scheduleTimer = 0;
+    const runScheduledApply = () => {
+      if (!scheduled) return;
+      scheduled = false;
+      if (scheduleFrame) {
+        cancelAnimationFrame(scheduleFrame);
+        scheduleFrame = 0;
+      }
+      if (scheduleTimer) {
+        window.clearTimeout(scheduleTimer);
+        scheduleTimer = 0;
+      }
+      if (disposed) return;
+      apply();
+    };
+
     const scheduleApply = () => {
       if (scheduled || disposed) return;
       scheduled = true;
-      requestAnimationFrame(() => {
-        scheduled = false;
-        if (disposed) return;
-        apply();
-      });
+      scheduleFrame = requestAnimationFrame(runScheduledApply);
+      scheduleTimer = window.setTimeout(runScheduledApply, 80);
     };
 
     let childListFrame = 0;
@@ -6249,12 +6302,29 @@ const FEATURES = {
       });
     };
 
+    apply();
     scheduleApply();
     const retryTimers = [250, 1000, 2500].map((delay) =>
       window.setTimeout(scheduleApply, delay),
     );
     const observer = new MutationObserver(scheduleApplySoon);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: [
+        "aria-label",
+        "class",
+        "data-app-action-sidebar-project-collapsed",
+        "data-app-action-sidebar-project-id",
+        "data-app-action-sidebar-project-label",
+        "data-app-action-sidebar-project-row",
+        "data-codexpp-sidebar-project-expanded",
+        ATTR,
+        "role",
+        "style",
+      ],
+      childList: true,
+      subtree: true,
+    });
     document.addEventListener("contextmenu", onProjectContextMenu, true);
     document.addEventListener("pointerdown", onProjectOverflowTrigger, true);
     document.addEventListener("click", onProjectOverflowTrigger, true);
@@ -6267,6 +6337,8 @@ const FEATURES = {
       disposed = true;
       observer.disconnect();
       if (childListFrame) cancelAnimationFrame(childListFrame);
+      if (scheduleFrame) cancelAnimationFrame(scheduleFrame);
+      if (scheduleTimer) window.clearTimeout(scheduleTimer);
       retryTimers.forEach((timer) => window.clearTimeout(timer));
       document.removeEventListener("contextmenu", onProjectContextMenu, true);
       document.removeEventListener("pointerdown", onProjectOverflowTrigger, true);
