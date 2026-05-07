@@ -1121,6 +1121,7 @@ const FEATURES = {
     const SECTION_ICON_ATTR = "data-codexpp-slash-section-icon";
     const INPUT_MODE_ATTR = "data-codexpp-slash-input-mode";
     const PROGRAM_SCROLL_ATTR = "data-codexpp-slash-programmatic-scroll";
+    const HOVER_SUPPRESS_ATTR = "data-codexpp-slash-hover-suppressed";
     const OVERLAY_NOISE_ATTR = "data-codexpp-slash-overlay-noise";
     const FAVORITES_GROUP_ATTR = "data-codexpp-slash-favorites";
     const FAVORITE_KEY_ATTR = "data-codexpp-slash-favorite-key";
@@ -1484,8 +1485,22 @@ const FEATURES = {
       [data-composer-overlay-floating-ui="true"]
         [${MENU_ATTR}="true"][${PROGRAM_SCROLL_ATTR}="true"]
         .vertical-scroll-fade-mask
+        [data-list-navigation-item="true"],
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${HOVER_SUPPRESS_ATTR}="true"]
+        .vertical-scroll-fade-mask
         [data-list-navigation-item="true"] {
         pointer-events: none !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${HOVER_SUPPRESS_ATTR}="true"]
+        [data-list-navigation-item="true"]:hover:not([aria-selected="true"]),
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${HOVER_SUPPRESS_ATTR}="true"]
+        [data-list-navigation-item="true"]:focus-visible:not([aria-selected="true"]) {
+        background-color: transparent !important;
+        opacity: 0.9 !important;
       }
 
       [data-composer-overlay-floating-ui="true"]
@@ -1562,6 +1577,14 @@ const FEATURES = {
         .${FAVORITE_BUTTON_CLASS}[data-favorite="true"] {
         opacity: 1 !important;
         transform: scale(1) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${HOVER_SUPPRESS_ATTR}="true"]
+        [data-list-navigation-item="true"]:hover
+        .${FAVORITE_BUTTON_CLASS}:not([data-favorite="true"]) {
+        opacity: 0 !important;
+        transform: scale(0.92) !important;
       }
 
       [data-composer-overlay-floating-ui="true"]
@@ -1663,8 +1686,20 @@ const FEATURES = {
 
     const scrollHandlers = new Map();
     const pointerHandlers = new Map();
+    const hoverGuardHandlers = new Map();
+    const wheelHandlers = new Map();
+    const hoverScrollStates = new WeakMap();
+    const hoverSuppressStates = new WeakMap();
     const scrollAnimations = new Map();
     const titleTimers = new Map();
+    const HOVER_GUARD_EVENTS = [
+      "pointermove",
+      "pointerover",
+      "pointerenter",
+      "mousemove",
+      "mouseover",
+      "mouseenter",
+    ];
     const NAV_NOISE_SELECTOR = [
       '[data-codexpp="nav-group"]',
       '[data-codexpp="pages-group"]',
@@ -1679,10 +1714,14 @@ const FEATURES = {
       subtree: true,
     };
     let scanFrame = 0;
+    let scanTimer = 0;
     let homePruneFrame = 0;
     let hardPruneTimer = 0;
     let disposed = false;
     let observer = null;
+    let documentHoverGuard = null;
+    let slashRowScrollAllowedUntil = 0;
+    const nativeScrollIntoView = Element.prototype.scrollIntoView;
 
     const normText = (node) =>
       String(node?.textContent || "").replace(/\s+/g, " ").trim();
@@ -1707,6 +1746,275 @@ const FEATURES = {
         /\bTweak Store\b/.test(text) ||
         /Better TerminalKeyboard ShortcutsDatabase Explorer/.test(text)
       );
+    };
+
+    const stopHoverSelectionEvent = (menu, event) => {
+      if (!(menu instanceof HTMLElement)) return;
+      trackPointerPosition(menu, event);
+      if (shouldBlockSuppressedHover(menu, event)) {
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        return;
+      }
+      freezeHoverScroll(menu);
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+    };
+
+    const installDocumentHoverGuard = () => {
+      if (documentHoverGuard) return;
+      documentHoverGuard = (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        stopHoverSelectionEvent(target.closest(`[${MENU_ATTR}="true"]`), event);
+      };
+      HOVER_GUARD_EVENTS.forEach((type) =>
+        window.addEventListener(type, documentHoverGuard, true),
+      );
+      HOVER_GUARD_EVENTS.forEach((type) =>
+        document.addEventListener(type, documentHoverGuard, true),
+      );
+    };
+
+    const allowSlashRowScrollIntoView = (duration = 220) => {
+      slashRowScrollAllowedUntil = Math.max(
+        slashRowScrollAllowedUntil,
+        performance.now() + duration,
+      );
+    };
+
+    const isSlashMenuRow = (node) =>
+      node instanceof HTMLElement &&
+      node.matches('[data-list-navigation-item="true"]') &&
+      !!node.closest(`[${MENU_ATTR}="true"]`);
+
+    const hoverSuppressStateFor = (menu) => {
+      let state = hoverSuppressStates.get(menu);
+      if (!state) {
+        state = {
+          active: false,
+          pointerX: null,
+          pointerY: null,
+          releaseAfter: 0,
+        };
+        hoverSuppressStates.set(menu, state);
+      }
+      return state;
+    };
+
+    const eventPointerPosition = (event) => {
+      if (!event || typeof event.clientX !== "number" || typeof event.clientY !== "number") {
+        return null;
+      }
+      return { x: event.clientX, y: event.clientY };
+    };
+
+    const trackPointerPosition = (menu, event) => {
+      const point = eventPointerPosition(event);
+      if (!point) return;
+      const state = hoverSuppressStateFor(menu);
+      if (!state.active) {
+        state.pointerX = point.x;
+        state.pointerY = point.y;
+      }
+    };
+
+    const clearHoverSelection = (menu) => {
+      const state = hoverSuppressStateFor(menu);
+      const pointerTarget =
+        typeof state.pointerX === "number" && typeof state.pointerY === "number"
+          ? document.elementFromPoint(state.pointerX, state.pointerY)
+          : null;
+      const rows = new Set(
+        Array.from(menu.querySelectorAll('[data-list-navigation-item="true"]:hover')),
+      );
+      const pointerRow = pointerTarget?.closest?.('[data-list-navigation-item="true"]');
+      if (pointerRow instanceof HTMLElement && menu.contains(pointerRow)) {
+        rows.add(pointerRow);
+      }
+      menu
+        .querySelectorAll('[data-list-navigation-item="true"][aria-selected="true"]')
+        .forEach((row) => {
+          if (!(row instanceof HTMLElement)) return;
+          rows.add(row);
+          const rect = row.getBoundingClientRect();
+          if (
+            typeof state.pointerX === "number" &&
+            typeof state.pointerY === "number" &&
+            state.pointerX >= rect.left &&
+            state.pointerX <= rect.right &&
+            state.pointerY >= rect.top &&
+            state.pointerY <= rect.bottom
+          ) {
+            rows.add(row);
+          }
+        });
+      rows.forEach((row) => {
+        if (!(row instanceof HTMLElement)) return;
+        row.setAttribute("aria-selected", "false");
+        row.blur();
+      });
+    };
+
+    const suppressHoverUntilPointerMoves = (menu, duration = 900) => {
+      if (!(menu instanceof HTMLElement)) return;
+      const state = hoverSuppressStateFor(menu);
+      state.active = true;
+      state.releaseAfter = performance.now() + duration;
+      menu.setAttribute(HOVER_SUPPRESS_ATTR, "true");
+      clearHoverSelection(menu);
+      [0, 80, 240].forEach((delay) => {
+        window.setTimeout(() => {
+          if (menu.hasAttribute(HOVER_SUPPRESS_ATTR)) clearHoverSelection(menu);
+        }, delay);
+      });
+    };
+
+    const clearHoverSuppression = (menu) => {
+      if (!(menu instanceof HTMLElement)) return;
+      const state = hoverSuppressStateFor(menu);
+      state.active = false;
+      state.releaseAfter = 0;
+      menu.removeAttribute(HOVER_SUPPRESS_ATTR);
+      if (!menu.hasAttribute(PROGRAM_SCROLL_ATTR)) {
+        menu.setAttribute(INPUT_MODE_ATTR, "pointer");
+      }
+    };
+
+    const shouldBlockSuppressedHover = (menu, event) => {
+      const state = hoverSuppressStateFor(menu);
+      if (!state.active) return false;
+      const point = eventPointerPosition(event);
+      const now = performance.now();
+      const scroller = menu.querySelector(".vertical-scroll-fade-mask");
+      const programmatic =
+        menu.hasAttribute(PROGRAM_SCROLL_ATTR) ||
+        (scroller instanceof HTMLElement &&
+          typeof hoverScrollStateFor(scroller).programmaticTarget === "number" &&
+          now < hoverScrollStateFor(scroller).programmaticUntil);
+
+      if (!point) return true;
+      if (state.pointerX === null || state.pointerY === null) {
+        if (!programmatic && now >= state.releaseAfter - 450) {
+          clearHoverSuppression(menu);
+          state.pointerX = point.x;
+          state.pointerY = point.y;
+          return false;
+        }
+        state.pointerX = point.x;
+        state.pointerY = point.y;
+        return true;
+      }
+      const moved = Math.hypot(point.x - state.pointerX, point.y - state.pointerY);
+      if (moved >= 5 && !programmatic && now >= state.releaseAfter - 450) {
+        clearHoverSuppression(menu);
+        state.pointerX = point.x;
+        state.pointerY = point.y;
+        return false;
+      }
+      return true;
+    };
+
+    const hoverScrollStateFor = (scroller) => {
+      let state = hoverScrollStates.get(scroller);
+      if (!state) {
+        state = {
+          freezeTop: scroller.scrollTop,
+          freezeUntil: 0,
+          lastTop: scroller.scrollTop,
+          programmaticTarget: null,
+          programmaticUntil: 0,
+          restoreFrame: 0,
+        };
+        hoverScrollStates.set(scroller, state);
+      }
+      return state;
+    };
+
+    const enforceHoverScrollFreeze = (scroller) => {
+      const state = hoverScrollStateFor(scroller);
+      const now = performance.now();
+      const currentTop = scroller.scrollTop;
+      const programmaticActive =
+        typeof state.programmaticTarget === "number" && now < state.programmaticUntil;
+      const programmaticDown = programmaticActive && state.programmaticTarget >= state.lastTop;
+
+      if (now <= state.freezeUntil && (!programmaticActive || programmaticDown)) {
+        if (currentTop < state.freezeTop - 1) {
+          scroller.scrollTop = state.freezeTop;
+          state.lastTop = state.freezeTop;
+          return true;
+        }
+        state.freezeTop = Math.max(state.freezeTop, currentTop);
+      }
+
+      state.lastTop = scroller.scrollTop;
+      return false;
+    };
+
+    const requestHoverScrollFreezeFrame = (scroller) => {
+      const state = hoverScrollStateFor(scroller);
+      if (state.restoreFrame) return;
+      const tick = () => {
+        state.restoreFrame = 0;
+        enforceHoverScrollFreeze(scroller);
+        if (performance.now() <= state.freezeUntil) {
+          state.restoreFrame = requestAnimationFrame(tick);
+        }
+      };
+      state.restoreFrame = requestAnimationFrame(tick);
+    };
+
+    const queueHoverScrollFreezeChecks = (scroller) => {
+      [0, 16, 80, 180, 360].forEach((delay) => {
+        window.setTimeout(() => enforceHoverScrollFreeze(scroller), delay);
+      });
+    };
+
+    const freezeHoverScroll = (menu) => {
+      const scroller = menu.querySelector(".vertical-scroll-fade-mask");
+      if (!(scroller instanceof HTMLElement)) return;
+      const state = hoverScrollStateFor(scroller);
+      const now = performance.now();
+      if (
+        typeof state.programmaticTarget === "number" &&
+        now < state.programmaticUntil &&
+        state.programmaticTarget < scroller.scrollTop - 1
+      ) {
+        state.freezeUntil = 0;
+        state.freezeTop = scroller.scrollTop;
+        state.lastTop = scroller.scrollTop;
+        return;
+      }
+      const stableTop = Math.max(state.lastTop, scroller.scrollTop);
+      state.freezeTop = Math.max(state.freezeTop, stableTop);
+      state.freezeUntil = Math.max(state.freezeUntil, now + 450);
+      requestHoverScrollFreezeFrame(scroller);
+      queueHoverScrollFreezeChecks(scroller);
+    };
+
+    const clearHoverScrollFreeze = (scroller) => {
+      const state = hoverScrollStateFor(scroller);
+      state.freezeUntil = 0;
+      state.freezeTop = scroller.scrollTop;
+      state.lastTop = scroller.scrollTop;
+    };
+
+    const allowProgrammaticScroll = (scroller, targetTop, duration = 900) => {
+      const state = hoverScrollStateFor(scroller);
+      if (targetTop < scroller.scrollTop - 1) {
+        state.freezeUntil = 0;
+        state.freezeTop = targetTop;
+      }
+      state.programmaticTarget = targetTop;
+      state.programmaticUntil = performance.now() + duration;
+    };
+
+    const patchedScrollIntoView = function (...args) {
+      if (isSlashMenuRow(this) && performance.now() > slashRowScrollAllowedUntil) {
+        return;
+      }
+      return nativeScrollIntoView.apply(this, args);
     };
 
     const looksLikeSlashPanel = (node) => {
@@ -2176,18 +2484,21 @@ const FEATURES = {
       navigationRows(scroller).forEach((item) =>
         item.setAttribute("aria-selected", item === row ? "true" : "false"),
       );
+      allowSlashRowScrollIntoView();
       row.scrollIntoView({ block: "nearest" });
       updateTopbar(scroller);
     };
 
     const ensureInitialFavoriteSelection = (scroller) => {
       if (scroller.dataset.codexppSlashFavoriteSelectionReady === "true") return;
+      if (scroller.closest(`[${MENU_ATTR}="true"]`)?.hasAttribute(HOVER_SUPPRESS_ATTR)) return;
       const firstFavorite = favoriteRows(scroller)[0];
       if (!(firstFavorite instanceof HTMLElement)) return;
       selectNavigationRow(scroller, firstFavorite);
       scroller.dataset.codexppSlashFavoriteSelectionReady = "true";
       const keepFavoriteSelected = () => {
         if (!scroller.isConnected) return;
+        if (scroller.closest(`[${MENU_ATTR}="true"]`)?.hasAttribute(HOVER_SUPPRESS_ATTR)) return;
         if (scroller.dataset.codexppSlashFavoriteSelectionTouched === "true") return;
         const nextFirstFavorite = favoriteRows(scroller)[0];
         if (!(nextFirstFavorite instanceof HTMLElement)) return;
@@ -2245,8 +2556,7 @@ const FEATURES = {
         }
         const animation = scrollAnimations.get(scroller);
         if (animation) {
-          cancelAnimationFrame(animation);
-          scrollAnimations.delete(scroller);
+          cancelScrollAnimation(scroller);
         }
         const pointerHandler = pointerHandlers.get(scroller);
         if (pointerHandler) {
@@ -2254,11 +2564,24 @@ const FEATURES = {
           scroller.removeEventListener("pointerdown", pointerHandler);
           pointerHandlers.delete(scroller);
         }
+        const wheelHandler = wheelHandlers.get(scroller);
+        if (wheelHandler) {
+          scroller.removeEventListener("wheel", wheelHandler);
+          wheelHandlers.delete(scroller);
+        }
+        const hoverGuardHandler = hoverGuardHandlers.get(scroller);
+        if (hoverGuardHandler) {
+          HOVER_GUARD_EVENTS.forEach((type) =>
+            scroller.removeEventListener(type, hoverGuardHandler, true),
+          );
+          hoverGuardHandlers.delete(scroller);
+        }
       }
       if (scroller instanceof HTMLElement) removeFavoriteSection(scroller);
       menu.removeAttribute(MENU_ATTR);
       menu.removeAttribute(INPUT_MODE_ATTR);
       menu.removeAttribute(PROGRAM_SCROLL_ATTR);
+      menu.removeAttribute(HOVER_SUPPRESS_ATTR);
       menu.querySelectorAll(`[${TOPBAR_ATTR}]`).forEach((node) => node.remove());
       menu.querySelectorAll(`.${FAVORITE_BUTTON_CLASS}`).forEach((node) => node.remove());
       menu.querySelectorAll(`.${SKILL_COPY_CLASS}`).forEach((copy) => {
@@ -2416,12 +2739,15 @@ const FEATURES = {
       const menu = scroller.closest(`[${MENU_ATTR}="true"]`);
       menu?.setAttribute(INPUT_MODE_ATTR, "keyboard");
       menu?.setAttribute(PROGRAM_SCROLL_ATTR, "true");
+      if (menu instanceof HTMLElement) suppressHoverUntilPointerMoves(menu);
+      scroller.dataset.codexppSlashFavoriteSelectionTouched = "true";
       scroller.scrollLeft = 0;
       const targetTop = sectionTop(scroller, section.group);
       const adjustedTop =
         sections.indexOf(section) > 0
           ? Math.min(targetTop + 1, scroller.scrollHeight - scroller.clientHeight)
           : targetTop;
+      allowProgrammaticScroll(scroller, adjustedTop);
       const topbar = scroller.previousElementSibling;
       if (topbar instanceof HTMLElement) {
         topbar.dataset.forcedActiveSection = section.key;
@@ -2448,9 +2774,16 @@ const FEATURES = {
       return Math.max(0, Math.min(target, scroller.scrollHeight - scroller.clientHeight));
     };
 
+    const cancelScrollAnimation = (scroller) => {
+      const animation = scrollAnimations.get(scroller);
+      if (!animation) return;
+      cancelAnimationFrame(animation.frame);
+      window.clearTimeout(animation.timer);
+      scrollAnimations.delete(scroller);
+    };
+
     const animateScrollTop = (scroller, targetTop, onStep, onDone) => {
-      const previous = scrollAnimations.get(scroller);
-      if (previous) cancelAnimationFrame(previous);
+      cancelScrollAnimation(scroller);
       const startTop = scroller.scrollTop;
       const delta = targetTop - startTop;
       if (Math.abs(delta) < 1) {
@@ -2461,19 +2794,31 @@ const FEATURES = {
       }
       const start = performance.now();
       const duration = 260;
+      const scheduleTick = () => {
+        const animation = { frame: 0, timer: 0 };
+        const run = (now = performance.now()) => {
+          if (scrollAnimations.get(scroller) !== animation) return;
+          cancelAnimationFrame(animation.frame);
+          window.clearTimeout(animation.timer);
+          tick(now);
+        };
+        animation.frame = requestAnimationFrame(run);
+        animation.timer = window.setTimeout(() => run(performance.now()), 16);
+        scrollAnimations.set(scroller, animation);
+      };
       const tick = (now) => {
         const progress = Math.min(1, (now - start) / duration);
         const eased = 1 - Math.pow(1 - progress, 3);
         scroller.scrollTop = startTop + delta * eased;
         onStep?.();
         if (progress < 1) {
-          scrollAnimations.set(scroller, requestAnimationFrame(tick));
+          scheduleTick();
         } else {
           scrollAnimations.delete(scroller);
           onDone?.();
         }
       };
-      scrollAnimations.set(scroller, requestAnimationFrame(tick));
+      scheduleTick();
     };
 
     const updateTopbar = (scroller, sections = groupSections(scroller)) => {
@@ -2531,10 +2876,14 @@ const FEATURES = {
       ensureInitialFavoriteSelection(scroller);
       reconcileFavoriteSelection(scroller);
       if (!scrollHandlers.has(scroller)) {
-        const handler = () => updateTopbar(scroller);
+        const handler = () => {
+          enforceHoverScrollFreeze(scroller);
+          updateTopbar(scroller);
+        };
         scroller.addEventListener("scroll", handler, { passive: true });
         scrollHandlers.set(scroller, handler);
       }
+      hoverScrollStateFor(scroller).lastTop = scroller.scrollTop;
       if (!pointerHandlers.has(scroller)) {
         const handler = (event) => {
           if (menu.hasAttribute(PROGRAM_SCROLL_ATTR)) return;
@@ -2545,6 +2894,18 @@ const FEATURES = {
         scroller.addEventListener("pointerdown", handler, { passive: true });
         pointerHandlers.set(scroller, handler);
       }
+      if (!wheelHandlers.has(scroller)) {
+        const handler = () => clearHoverScrollFreeze(scroller);
+        scroller.addEventListener("wheel", handler, { passive: true });
+        wheelHandlers.set(scroller, handler);
+      }
+      if (!hoverGuardHandlers.has(scroller)) {
+        const handler = (event) => {
+          stopHoverSelectionEvent(menu, event);
+        };
+        HOVER_GUARD_EVENTS.forEach((type) => scroller.addEventListener(type, handler, true));
+        hoverGuardHandlers.set(scroller, handler);
+      }
     };
 
     const activeSlashMenu = () =>
@@ -2554,6 +2915,9 @@ const FEATURES = {
           menu.isConnected &&
           menu.querySelector(".vertical-scroll-fade-mask"),
       );
+
+    installDocumentHoverGuard();
+    Element.prototype.scrollIntoView = patchedScrollIntoView;
 
     const keyDigit = (event) => {
       const key = String(event.key || "");
@@ -2579,6 +2943,7 @@ const FEATURES = {
         event.key === "PageDown" ||
         event.key === "PageUp"
       ) {
+        allowSlashRowScrollIntoView();
         menu.setAttribute(INPUT_MODE_ATTR, "keyboard");
         return;
       }
@@ -2638,8 +3003,16 @@ const FEATURES = {
     };
 
     const scheduleScan = () => {
-      if (scanFrame) return;
-      scanFrame = requestAnimationFrame(scan);
+      if (scanFrame || scanTimer) return;
+      const run = () => {
+        if (scanFrame) cancelAnimationFrame(scanFrame);
+        if (scanTimer) window.clearTimeout(scanTimer);
+        scanFrame = 0;
+        scanTimer = 0;
+        scan();
+      };
+      scanFrame = requestAnimationFrame(run);
+      scanTimer = window.setTimeout(run, 60);
     };
 
     const scheduleSlashWork = () => {
@@ -2665,6 +3038,7 @@ const FEATURES = {
       observer.disconnect();
       window.clearInterval(activeSlashInterval);
       if (scanFrame) cancelAnimationFrame(scanFrame);
+      if (scanTimer) window.clearTimeout(scanTimer);
       if (homePruneFrame) cancelAnimationFrame(homePruneFrame);
       if (hardPruneTimer) window.clearTimeout(hardPruneTimer);
       document.removeEventListener("input", scheduleSlashWork, true);
@@ -2681,8 +3055,31 @@ const FEATURES = {
         scroller.removeEventListener("pointerdown", handler);
       }
       pointerHandlers.clear();
+      for (const [scroller, handler] of wheelHandlers) {
+        scroller.removeEventListener("wheel", handler);
+      }
+      wheelHandlers.clear();
+      for (const [scroller, handler] of hoverGuardHandlers) {
+        HOVER_GUARD_EVENTS.forEach((type) =>
+          scroller.removeEventListener(type, handler, true),
+        );
+      }
+      hoverGuardHandlers.clear();
+      if (documentHoverGuard) {
+        HOVER_GUARD_EVENTS.forEach((type) =>
+          window.removeEventListener(type, documentHoverGuard, true),
+        );
+        HOVER_GUARD_EVENTS.forEach((type) =>
+          document.removeEventListener(type, documentHoverGuard, true),
+        );
+        documentHoverGuard = null;
+      }
+      if (Element.prototype.scrollIntoView === patchedScrollIntoView) {
+        Element.prototype.scrollIntoView = nativeScrollIntoView;
+      }
       for (const animation of scrollAnimations.values()) {
-        cancelAnimationFrame(animation);
+        cancelAnimationFrame(animation.frame);
+        window.clearTimeout(animation.timer);
       }
       scrollAnimations.clear();
       for (const timer of titleTimers.values()) window.clearTimeout(timer);
@@ -2706,6 +3103,9 @@ const FEATURES = {
       document
         .querySelectorAll(`[${PROGRAM_SCROLL_ATTR}]`)
         .forEach((node) => node.removeAttribute(PROGRAM_SCROLL_ATTR));
+      document
+        .querySelectorAll(`[${HOVER_SUPPRESS_ATTR}]`)
+        .forEach((node) => node.removeAttribute(HOVER_SUPPRESS_ATTR));
       document
         .querySelectorAll(`[${OVERLAY_ATTR}]`)
         .forEach((node) => node.removeAttribute(OVERLAY_ATTR));
@@ -6071,10 +6471,7 @@ function startMainSlashMenuShortcutBridge(api) {
       const url = wc.getURL?.() || "";
       if (!url.startsWith("app://") && !url.includes("codex")) return;
       event.preventDefault();
-      wc.executeJavaScript(
-        `window.dispatchEvent(new CustomEvent("codexpp-slash-section-shortcut", { detail: { digit: ${digit} } }))`,
-        true,
-      ).catch(() => {});
+      wc.executeJavaScript(dispatchSlashMenuShortcutScript(digit), true).catch(() => {});
     });
   };
 
@@ -6091,13 +6488,77 @@ function startMainSlashMenuShortcutBridge(api) {
 }
 
 function slashMenuShortcutDigit(input = {}) {
-  if (input.type !== "keyDown") return 0;
-  if (!(input.meta || input.control) || input.alt || input.shift) return 0;
-  const key = String(input.key || "");
+  if (input.type !== "keyDown" && input.type !== "rawKeyDown") return 0;
+  if (!(input.meta || input.control || input.command) || input.alt || input.shift) return 0;
+  const key = String(input.key || input.keyCode || "");
   if (/^[1-9]$/.test(key)) return Number(key);
   const code = String(input.code || "");
   const match = /^(?:Digit|Numpad)([1-9])$/.exec(code);
   return match ? Number(match[1]) : 0;
+}
+
+function dispatchSlashMenuShortcutScript(digit) {
+  return `
+    (() => {
+      const digit = ${Number(digit) || 0};
+      const activeMenu = () =>
+        Array.from(document.querySelectorAll('[data-codexpp-slash-menu="true"]')).find(
+          (menu) =>
+            menu instanceof HTMLElement &&
+            menu.isConnected &&
+            menu.querySelector(".vertical-scroll-fade-mask"),
+        );
+      const menu = activeMenu();
+      const scroller = menu?.querySelector(".vertical-scroll-fade-mask");
+      const before = scroller instanceof HTMLElement ? scroller.scrollTop : null;
+      const shortcutEvent = new CustomEvent("codexpp-slash-section-shortcut", {
+        detail: { digit },
+        cancelable: true,
+      });
+      window.dispatchEvent(shortcutEvent);
+
+      window.setTimeout(() => {
+        const currentMenu = activeMenu();
+        const currentScroller = currentMenu?.querySelector(".vertical-scroll-fade-mask");
+        if (!(currentScroller instanceof HTMLElement)) return;
+        if (before !== null && Math.abs(currentScroller.scrollTop - before) > 1) return;
+        const sections = Array.from(currentScroller.children).filter(
+          (node) =>
+            node instanceof HTMLElement &&
+            node.getAttribute("data-codexpp-slash-section") &&
+            node.getAttribute("data-codexpp-slash-section-empty") !== "true" &&
+            node.querySelector('[data-list-navigation-item="true"]'),
+        );
+        const target = sections[digit - 1];
+        if (!(target instanceof HTMLElement)) return;
+        const rawTop =
+          currentScroller.scrollTop +
+          target.getBoundingClientRect().top -
+          currentScroller.getBoundingClientRect().top;
+        const adjustedTop =
+          digit > 1
+            ? Math.min(rawTop + 1, currentScroller.scrollHeight - currentScroller.clientHeight)
+            : rawTop;
+        currentMenu.setAttribute("data-codexpp-slash-input-mode", "keyboard");
+        currentMenu.setAttribute("data-codexpp-slash-programmatic-scroll", "true");
+        currentMenu.setAttribute("data-codexpp-slash-hover-suppressed", "true");
+        currentScroller.scrollLeft = 0;
+        currentScroller.scrollTo({
+          top: Math.max(
+            0,
+            Math.min(adjustedTop, currentScroller.scrollHeight - currentScroller.clientHeight),
+          ),
+          behavior: "smooth",
+        });
+        window.setTimeout(
+          () => currentMenu.removeAttribute("data-codexpp-slash-programmatic-scroll"),
+          320,
+        );
+      }, 120);
+
+      return shortcutEvent.defaultPrevented;
+    })()
+  `;
 }
 
 function showSidebarBatchMenu(payload) {
