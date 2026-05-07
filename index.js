@@ -32,6 +32,8 @@
  *                                    pinned sidebar chats.
  *  • show-message-metrics-on-hover  Shows Codex token metrics beside
  *                                   assistant messages on hover.
+ *  • slash-menu-polish  Tightens the composer slash menu with denser rows,
+ *                       clearer active state, and calmer section headers.
  *
  * Authoring notes
  * ---------------
@@ -49,6 +51,7 @@ module.exports = {
       startMainUsageProvider(api);
       startMainProjectLabelProvider(api);
       startMainSidebarBatchMenuProvider(api);
+      startMainSlashMenuShortcutBridge(api);
       return;
     }
 
@@ -66,6 +69,7 @@ module.exports = {
         "sidebar-project-backgrounds": true,
         "sidebar-chat-multi-select": true,
         "show-pinned-chat-project-names": true,
+        "slash-menu-polish": true,
       },
     };
     this._state = state;
@@ -184,6 +188,12 @@ function renderSettings(root, state) {
       title: "Show project label for pinned chats",
       description:
         "Show a smaller, subdued project label under pinned chats, and under all chats in chronological list mode.",
+    },
+    {
+      id: "slash-menu-polish",
+      title: "Slash menu polish",
+      description:
+        "Tighten the composer slash menu with denser rows, clearer active state, and calmer section headers.",
     },
   ];
 
@@ -1088,6 +1098,1636 @@ const FEATURES = {
     document.head.appendChild(style);
 
     return () => {
+      style.remove();
+    };
+  },
+
+  /**
+   * Refine the composer slash menu by lightly annotating the live DOM.
+   *
+   * Live DOM shape captured via Electron CDP:
+   *   [data-composer-overlay-floating-ui] > slash panel
+   *   slash panel [data-list-navigation-item="true"]
+   *   slash panel .sticky.top-0          section headers
+   */
+  "slash-menu-polish"() {
+    const STYLE_ID = "codexpp-slash-menu-polish";
+    const MENU_ATTR = "data-codexpp-slash-menu";
+    const OVERLAY_ATTR = "data-codexpp-slash-overlay";
+    const TOPBAR_ATTR = "data-codexpp-slash-topbar";
+    const SECTION_ATTR = "data-codexpp-slash-section";
+    const SECTION_EMPTY_ATTR = "data-codexpp-slash-section-empty";
+    const SECTION_TITLE_ATTR = "data-codexpp-slash-section-title";
+    const SECTION_ICON_ATTR = "data-codexpp-slash-section-icon";
+    const INPUT_MODE_ATTR = "data-codexpp-slash-input-mode";
+    const PROGRAM_SCROLL_ATTR = "data-codexpp-slash-programmatic-scroll";
+    const OVERLAY_NOISE_ATTR = "data-codexpp-slash-overlay-noise";
+    const FAVORITES_GROUP_ATTR = "data-codexpp-slash-favorites";
+    const FAVORITE_KEY_ATTR = "data-codexpp-slash-favorite-key";
+    const FAVORITE_CLONE_ATTR = "data-codexpp-slash-favorite-clone";
+    const FAVORITE_SOURCE_SECTION_ATTR = "data-codexpp-slash-favorite-source-section";
+    const FAVORITE_DUPLICATE_HIDDEN_ATTR =
+      "data-codexpp-slash-favorite-duplicate-hidden";
+    const FAVORITES_STORAGE_KEY = "codexpp.slashMenuFavorites.v1";
+    const FAVORITE_BUTTON_CLASS = "codexpp-slash-favorite-button";
+    const SKILL_COPY_CLASS = "codexpp-slash-skill-copy";
+    document.getElementById(STYLE_ID)?.remove();
+
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      [data-composer-overlay-floating-ui="true"] {
+        isolation: isolate;
+      }
+
+      [data-composer-overlay-floating-ui="true"][${OVERLAY_ATTR}="true"]
+        > :not([${MENU_ATTR}="true"]) {
+        display: none !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        > [${OVERLAY_NOISE_ATTR}="true"] {
+        display: none !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [data-codexpp="nav-group"],
+      [data-composer-overlay-floating-ui="true"]
+        [data-codexpp="pages-group"],
+      [data-composer-overlay-floating-ui="true"]
+        [data-codexpp="nav-config"],
+      [data-composer-overlay-floating-ui="true"]
+        [data-codexpp="nav-tweaks"],
+      [data-composer-overlay-floating-ui="true"]
+        [data-codexpp^="nav-page-"] {
+        display: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        overflow: hidden !important;
+        pointer-events: none !important;
+      }
+
+      [class*="[container-name:home-main-content]"]
+        [data-codexpp="nav-group"],
+      [class*="[container-name:home-main-content]"]
+        [data-codexpp="pages-group"],
+      [class*="[container-name:home-main-content]"]
+        [data-codexpp="nav-config"],
+      [class*="[container-name:home-main-content]"]
+        [data-codexpp="nav-tweaks"],
+      [class*="[container-name:home-main-content]"]
+        [data-codexpp^="nav-tweak"],
+      [class*="[container-name:home-main-content]"]
+        [data-codexpp^="nav-page-"] {
+        display: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        overflow: hidden !important;
+        pointer-events: none !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        > [${MENU_ATTR}="true"] {
+        width: min(100%, calc(100vw - 1rem)) !important;
+        max-width: calc(100vw - 1rem) !important;
+        border-color: color-mix(in srgb, currentColor 13%, transparent) !important;
+        background-color: var(--color-token-dropdown-background) !important;
+        background-color: color-mix(
+          in srgb,
+          var(--color-token-dropdown-background) 94%,
+          var(--color-token-main-surface-primary) 6%
+        ) !important;
+        box-shadow:
+          0 18px 48px rgb(0 0 0 / 0.28),
+          0 1px 0 rgb(255 255 255 / 0.06) inset !important;
+        padding: 0.375rem !important;
+        backdrop-filter: blur(16px) saturate(130%) !important;
+        overflow-x: hidden !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .vertical-scroll-fade-mask {
+        gap: 0.125rem !important;
+        overflow-x: hidden !important;
+        overscroll-behavior-x: none !important;
+        padding-top: 0.5rem !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .vertical-scroll-fade-mask
+        > div:not([${TOPBAR_ATTR}]) {
+        display: flex !important;
+        flex: 0 0 auto !important;
+        flex-direction: column !important;
+        height: auto !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+        overflow-y: visible !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .vertical-scroll-fade-mask
+        > div[${SECTION_ATTR}]:not(:first-child) {
+        border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent) !important;
+        margin-top: 0.25rem !important;
+        padding-top: 0.25rem !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .vertical-scroll-fade-mask
+        > div[${SECTION_EMPTY_ATTR}="true"] {
+        display: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${TOPBAR_ATTR}="true"] {
+        display: flex !important;
+        flex: none !important;
+        min-width: 0 !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 0.75rem !important;
+        margin: -0.375rem -0.375rem 0 !important;
+        border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent) !important;
+        background-color: var(--color-token-dropdown-background) !important;
+        background-image: linear-gradient(
+          to bottom,
+          color-mix(in srgb, var(--color-token-dropdown-background) 98%, transparent),
+          color-mix(in srgb, var(--color-token-dropdown-background) 90%, transparent)
+        ) !important;
+        padding: 0.375rem 0.5rem 0.375rem 0.625rem !important;
+        color: var(--color-token-text-primary) !important;
+        backdrop-filter: blur(16px) saturate(130%) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_TITLE_ATTR}] {
+        min-width: 0 !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+        font-size: 0.75rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0 !important;
+        line-height: 1rem !important;
+        text-transform: none !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_TITLE_ATTR}][data-changing="true"] {
+        animation: codexpp-slash-title-change 180ms ease !important;
+      }
+
+      @keyframes codexpp-slash-title-change {
+        0% {
+          opacity: 0;
+          transform: translateY(0.25rem);
+        }
+        100% {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .codexpp-slash-section-icons {
+        display: flex !important;
+        flex: none !important;
+        align-items: center !important;
+        gap: 0.125rem !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_ICON_ATTR}] {
+        display: inline-flex !important;
+        position: relative !important;
+        width: 1.5rem !important;
+        height: 1.5rem !important;
+        flex: none !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border: 0 !important;
+        border-radius: 999px !important;
+        background: transparent !important;
+        color: var(--color-token-text-secondary) !important;
+        font-weight: 800 !important;
+        opacity: 0.78 !important;
+        overflow: hidden !important;
+        transition:
+          color 140ms ease,
+          opacity 140ms ease,
+          transform 140ms ease !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_ICON_ATTR}]::before {
+        content: "" !important;
+        position: absolute !important;
+        inset: 0 !important;
+        border-radius: inherit !important;
+        background: var(--codexpp-section-color, var(--color-token-text-primary)) !important;
+        box-shadow: 0 0 0 1px color-mix(in srgb, #fff 24%, transparent) inset !important;
+        opacity: 0 !important;
+        transform: scale(0.62) !important;
+        transition:
+          opacity 160ms ease,
+          transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_ICON_ATTR}][data-active="true"] {
+        color: #fff !important;
+        font-weight: 900 !important;
+        opacity: 1 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_ICON_ATTR}][data-active="true"]::before {
+        opacity: 1 !important;
+        transform: scale(1) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_ICON_ATTR}]:hover:not([data-active="true"]) {
+        background: color-mix(in srgb, currentColor 8%, transparent) !important;
+        opacity: 1 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_ICON_ATTR}][data-active="true"]:hover {
+        color: #fff !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_ICON_ATTR}]
+        svg {
+        position: relative !important;
+        z-index: 1 !important;
+        width: 0.9375rem !important;
+        height: 0.9375rem !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [${SECTION_ICON_ATTR}][data-active="true"]
+        svg path {
+        stroke-width: 1.8 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][${FAVORITE_DUPLICATE_HIDDEN_ATTR}="true"] {
+        display: none !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"] {
+        box-sizing: border-box !important;
+        position: relative !important;
+        width: 100% !important;
+        min-height: 1.75rem !important;
+        height: 1.75rem !important;
+        padding: 0 0.625rem !important;
+        color: var(--color-token-text-primary) !important;
+        opacity: 0.9 !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        overflow-x: hidden !important;
+        transition:
+          background-color 120ms ease,
+          color 120ms ease,
+          opacity 120ms ease !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]
+        > div {
+        min-height: 1.25rem !important;
+        gap: 0.625rem !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]
+        svg {
+        width: 1rem !important;
+        height: 1rem !important;
+        color: var(--color-token-description-foreground) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]:hover,
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]:focus-visible {
+        background-color: color-mix(in srgb, currentColor 7%, transparent) !important;
+        opacity: 1 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][aria-selected="true"] {
+        background-color: color-mix(
+          in srgb,
+          var(--color-token-text-primary) 11%,
+          transparent
+        ) !important;
+        color: var(--color-token-text-primary) !important;
+        opacity: 1 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][aria-selected="true"]
+        svg {
+        color: var(--color-token-text-primary) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${INPUT_MODE_ATTR}="keyboard"]
+        [data-list-navigation-item="true"]:hover:not([aria-selected="true"]) {
+        background-color: transparent !important;
+        opacity: 0.9 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${PROGRAM_SCROLL_ATTR}="true"]
+        .vertical-scroll-fade-mask
+        [data-list-navigation-item="true"] {
+        pointer-events: none !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]
+        div,
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]
+        span {
+        min-width: 0 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]
+        .text-token-description-foreground,
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]
+        span[class*="text-token-description-foreground"] {
+        color: var(--color-token-text-secondary) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]
+        span.ml-auto {
+        max-width: 40% !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+        border: 1px solid color-mix(in srgb, currentColor 12%, transparent) !important;
+        border-radius: 999px !important;
+        padding: 0 0.375rem !important;
+        font-size: 0.6875rem !important;
+        line-height: 1rem !important;
+        color: var(--color-token-text-secondary) !important;
+        background-color: color-mix(in srgb, currentColor 5%, transparent) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .${FAVORITE_BUTTON_CLASS} {
+        display: inline-flex !important;
+        width: 1.25rem !important;
+        height: 1.25rem !important;
+        flex: 0 0 1.25rem !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border: 0 !important;
+        border-radius: 999px !important;
+        background: transparent !important;
+        color: var(--color-token-text-secondary) !important;
+        cursor: pointer !important;
+        opacity: 0 !important;
+        transform: scale(0.92) !important;
+        transition:
+          color 120ms ease,
+          opacity 120ms ease,
+          transform 120ms ease !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"]:hover
+        .${FAVORITE_BUTTON_CLASS},
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][aria-selected="true"]
+        .${FAVORITE_BUTTON_CLASS},
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .${FAVORITE_BUTTON_CLASS}[data-favorite="true"] {
+        opacity: 1 !important;
+        transform: scale(1) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .${FAVORITE_BUTTON_CLASS}[data-favorite="true"] {
+        color: #f4c95d !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .${FAVORITE_BUTTON_CLASS}:hover {
+        color: #ffd76a !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .${FAVORITE_BUTTON_CLASS}
+        svg {
+        width: 0.875rem !important;
+        height: 0.875rem !important;
+        color: currentColor !important;
+        stroke-width: 2 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .sticky.top-0 {
+        position: static !important;
+        height: 0 !important;
+        margin: 0 !important;
+        overflow: hidden !important;
+        padding: 0 !important;
+        border: 0 !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][${SECTION_ATTR}="skills"],
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][${FAVORITE_SOURCE_SECTION_ATTR}="skills"] {
+        height: auto !important;
+        min-height: 2.875rem !important;
+        padding-top: 0.3125rem !important;
+        padding-bottom: 0.3125rem !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][${SECTION_ATTR}="skills"]
+        > div,
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][${FAVORITE_SOURCE_SECTION_ATTR}="skills"]
+        > div {
+        align-items: center !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .${SKILL_COPY_CLASS} {
+        display: flex !important;
+        min-width: 0 !important;
+        flex: 1 1 auto !important;
+        flex-direction: column !important;
+        gap: 0.0625rem !important;
+        overflow: hidden !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .${SKILL_COPY_CLASS}
+        > div {
+        max-width: 100% !important;
+        flex: none !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+        line-height: 1rem !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        .${SKILL_COPY_CLASS}
+        > span {
+        max-width: 100% !important;
+        flex: none !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+        color: var(--color-token-text-secondary) !important;
+        font-size: 0.75rem !important;
+        line-height: 1rem !important;
+      }
+    `;
+    document.head.appendChild(style);
+
+    const scrollHandlers = new Map();
+    const pointerHandlers = new Map();
+    const scrollAnimations = new Map();
+    const titleTimers = new Map();
+    const NAV_NOISE_SELECTOR = [
+      '[data-codexpp="nav-group"]',
+      '[data-codexpp="pages-group"]',
+      '[data-codexpp="nav-config"]',
+      '[data-codexpp="nav-tweaks"]',
+      '[data-codexpp^="nav-tweak"]',
+      '[data-codexpp^="nav-page-"]',
+    ].join(", ");
+    const OBSERVER_OPTIONS = {
+      characterData: true,
+      childList: true,
+      subtree: true,
+    };
+    let scanFrame = 0;
+    let homePruneFrame = 0;
+    let hardPruneTimer = 0;
+    let disposed = false;
+    let observer = null;
+
+    const normText = (node) =>
+      String(node?.textContent || "").replace(/\s+/g, " ").trim();
+
+    const isOverlayNoise = (node) => {
+      if (node instanceof HTMLElement) {
+        const codexpp = node.getAttribute("data-codexpp") || "";
+        if (
+          codexpp === "nav-group" ||
+          codexpp === "pages-group" ||
+          codexpp.startsWith("nav-page-") ||
+          codexpp === "nav-config" ||
+          codexpp === "nav-tweaks"
+        ) {
+          return true;
+        }
+      }
+      const text = normText(node);
+      return (
+        /^Codex\+\+\b/.test(text) ||
+        /^Tweaks\b/.test(text) ||
+        /\bTweak Store\b/.test(text) ||
+        /Better TerminalKeyboard ShortcutsDatabase Explorer/.test(text)
+      );
+    };
+
+    const looksLikeSlashPanel = (node) => {
+      if (!(node instanceof HTMLElement)) return false;
+      if (node.hasAttribute(MENU_ATTR)) return true;
+      if (/^No commands$/i.test(normText(node))) return true;
+      const scroller = node.querySelector(".vertical-scroll-fade-mask");
+      return (
+        scroller instanceof HTMLElement &&
+        node.querySelector('[data-list-navigation-item="true"]')
+      );
+    };
+
+    const isOverlaySlashActive = (overlay) =>
+      isSlashQueryActive() ||
+      Array.from(overlay.children).some((child) => looksLikeSlashPanel(child));
+
+    const markOverlayNoise = (overlay) => {
+      const active = isOverlaySlashActive(overlay);
+      Array.from(overlay.children).forEach((child) => {
+        if (!(child instanceof HTMLElement)) return;
+        if (active && !looksLikeSlashPanel(child) && isOverlayNoise(child)) {
+          child.setAttribute(OVERLAY_NOISE_ATTR, "true");
+        } else {
+          child.removeAttribute(OVERLAY_NOISE_ATTR);
+        }
+      });
+    };
+
+    const pruneOverlayNoise = (overlay) => {
+      if (!isOverlaySlashActive(overlay)) return;
+      Array.from(overlay.children).forEach((child) => {
+        if (!(child instanceof HTMLElement)) return;
+        if (looksLikeSlashPanel(child) || !isOverlayNoise(child)) return;
+        child.remove();
+      });
+    };
+
+    const pruneMenuNoise = (menu) => {
+      menu.querySelectorAll(NAV_NOISE_SELECTOR).forEach((node) => node.remove());
+    };
+
+    const pruneHomeContentNoise = () => {
+      document
+        .querySelectorAll(
+          [
+            '[class*="[container-name:home-main-content]"] [data-codexpp="nav-group"]',
+            '[class*="[container-name:home-main-content]"] [data-codexpp="pages-group"]',
+            '[class*="[container-name:home-main-content]"] [data-codexpp="nav-config"]',
+            '[class*="[container-name:home-main-content]"] [data-codexpp="nav-tweaks"]',
+            '[class*="[container-name:home-main-content]"] [data-codexpp^="nav-tweak"]',
+            '[class*="[container-name:home-main-content]"] [data-codexpp^="nav-page-"]',
+          ].join(", "),
+        )
+        .forEach((node) => node.remove());
+    };
+
+    const shouldPruneHomeContentNoise = () =>
+      isSlashQueryActive() ||
+      !!document.querySelector(
+        '[data-composer-overlay-floating-ui="true"], [data-codexpp-slash-menu="true"]',
+      );
+
+    const scheduleHomeContentPrune = () => {
+      if (homePruneFrame) return;
+      homePruneFrame = requestAnimationFrame(() => {
+        homePruneFrame = 0;
+        if (shouldPruneHomeContentNoise()) pruneHomeContentNoise();
+      });
+    };
+
+    const hardPruneNoise = () => {
+      try {
+        pruneHomeContentNoise();
+        document
+          .querySelectorAll(`[${MENU_ATTR}="true"]`)
+          .forEach((menu) => {
+            if (menu instanceof HTMLElement) pruneMenuNoise(menu);
+          });
+      } catch {
+        // Ignore transient DOM shapes while Codex is replacing the slash panel.
+      }
+    };
+
+    const scheduleHardPruneNoise = () => {
+      if (hardPruneTimer || disposed) return;
+      hardPruneTimer = window.setTimeout(() => {
+        hardPruneTimer = 0;
+        if (disposed || !shouldPruneHomeContentNoise()) return;
+        observer?.disconnect();
+        hardPruneNoise();
+        requestAnimationFrame(() => {
+          if (!disposed) {
+            observer?.observe(document.body, OBSERVER_OPTIONS);
+            scheduleScan();
+          }
+        });
+      }, 60);
+    };
+
+    const sectionKey = (title) =>
+      String(title || "General")
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9-]/gi, "")
+        .toLowerCase() || "general";
+
+    const sectionColor = (key, index) => {
+      const known = {
+        favorites: "#f4c95d",
+        general: "#8ab4ff",
+        skills: "#7dd3a8",
+        mcp: "#f0b86a",
+        tools: "#c4a7ff",
+      };
+      return known[key] || ["#8ab4ff", "#7dd3a8", "#f0b86a", "#c4a7ff"][index % 4];
+    };
+
+    const sectionIconSvg = (key) => {
+      if (key === "favorites") {
+        return (
+          '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true">' +
+          '<path d="m10 2.75 2.14 4.35 4.8.7-3.47 3.38.82 4.77L10 13.7l-4.29 2.25.82-4.77L3.06 7.8l4.8-.7L10 2.75Z" fill="currentColor"/>' +
+          "</svg>"
+        );
+      }
+      if (key === "skills") {
+        return (
+          '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true">' +
+          '<path d="M10 2.25 16.5 6v8L10 17.75 3.5 14V6L10 2.25Zm0 1.5L5.1 6.58 10 9.42l4.9-2.84L10 3.75Zm-5.2 4v5.5l4.55 2.62v-5.5L4.8 7.75Zm10.4 0-4.55 2.62v5.5l4.55-2.62v-5.5Z" fill="currentColor"/>' +
+          "</svg>"
+        );
+      }
+      return (
+        '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true">' +
+        '<path d="M4.25 5.25h11.5M4.25 10h11.5M4.25 14.75h11.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+        "</svg>"
+      );
+    };
+
+    const starIconSvg = (filled) =>
+      filled
+        ? '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m10 2.75 2.14 4.35 4.8.7-3.47 3.38.82 4.77L10 13.7l-4.29 2.25.82-4.77L3.06 7.8l4.8-.7L10 2.75Z" fill="currentColor"/></svg>'
+        : '<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m10 3.5 1.85 3.75 4.14.6-3 2.92.71 4.12L10 12.94l-3.7 1.95.71-4.12-3-2.92 4.14-.6L10 3.5Z" stroke="currentColor" stroke-linejoin="round"/></svg>';
+
+    const readFavorites = () => {
+      try {
+        const raw = window.localStorage?.getItem(FAVORITES_STORAGE_KEY);
+        const values = JSON.parse(raw || "[]");
+        return new Set(Array.isArray(values) ? values.filter(Boolean) : []);
+      } catch {
+        return new Set();
+      }
+    };
+
+    const writeFavorites = (favorites) => {
+      try {
+        window.localStorage?.setItem(
+          FAVORITES_STORAGE_KEY,
+          JSON.stringify(Array.from(favorites).sort()),
+        );
+      } catch {
+        // Ignore storage failures; the row controls still update for this render.
+      }
+    };
+
+    const rowFavoriteKey = (button, fallbackSectionKey) => {
+      const section = fallbackSectionKey || button.getAttribute(SECTION_ATTR) || "general";
+      const text = normText(button)
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      return text ? `${section}:${text}` : "";
+    };
+
+    const isSlashSearchActive = () =>
+      Array.from(document.querySelectorAll('.ProseMirror[contenteditable="true"]')).some(
+        (editor) => {
+          if (!(editor instanceof HTMLElement)) return false;
+          const text = normText(editor);
+          return text.startsWith("/") && text.length > 1;
+        },
+      );
+
+    const refreshFavoriteViews = () => {
+      document
+        .querySelectorAll(`[${MENU_ATTR}="true"] .vertical-scroll-fade-mask`)
+        .forEach((scroller) => {
+          if (!(scroller instanceof HTMLElement)) return;
+          syncFavoriteControls(scroller);
+          syncFavoritesSection(scroller);
+          const sections = groupSections(scroller);
+          const topbar = scroller.previousElementSibling;
+          if (topbar instanceof HTMLElement) renderTopbarIcons(topbar, sections);
+          updateTopbar(scroller, sections);
+        });
+    };
+
+    const toggleFavorite = (key) => {
+      if (!key) return;
+      const favorites = readFavorites();
+      if (favorites.has(key)) favorites.delete(key);
+      else favorites.add(key);
+      writeFavorites(favorites);
+      refreshFavoriteViews();
+      scheduleScan();
+    };
+
+    const stripNativeCommandState = (row) => {
+      if (!(row instanceof HTMLElement)) return;
+      const stripNode = (node) => {
+        if (!(node instanceof HTMLElement)) return;
+        node.removeAttribute(FAVORITE_DUPLICATE_HIDDEN_ATTR);
+        for (const attr of Array.from(node.attributes)) {
+          if (
+            attr.name === "cmdk-item" ||
+            attr.name === "data-value" ||
+            (attr.name.startsWith("data-codexpp-") &&
+              !attr.name.startsWith("data-codexpp-slash-"))
+          ) {
+            node.removeAttribute(attr.name);
+          }
+        }
+      };
+      stripNode(row);
+      row.querySelectorAll("*").forEach(stripNode);
+    };
+
+    const ensureFavoriteControl = (button, key, favorites = readFavorites()) => {
+      if (!key) return;
+      button.setAttribute(FAVORITE_KEY_ATTR, key);
+      const inner = button.firstElementChild instanceof HTMLElement ? button.firstElementChild : button;
+      let control = button.querySelector(`:scope .${FAVORITE_BUTTON_CLASS}`);
+      if (!(control instanceof HTMLElement)) {
+        control = document.createElement("span");
+        control.setAttribute("role", "button");
+        control.setAttribute("tabindex", "-1");
+        control.className = FAVORITE_BUTTON_CLASS;
+        control.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        control.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        control.addEventListener("pointerup", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleFavorite(button.getAttribute(FAVORITE_KEY_ATTR) || key);
+        });
+        control.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        const shortcut = inner.querySelector("span.ml-auto");
+        if (shortcut instanceof HTMLElement) inner.insertBefore(control, shortcut);
+        else inner.appendChild(control);
+      }
+      const active = favorites.has(key);
+      control.dataset.favorite = active ? "true" : "false";
+      control.setAttribute("aria-label", active ? "Remove from favorites" : "Add to favorites");
+      control.innerHTML = starIconSvg(active);
+    };
+
+    const unwrapSkillRow = (button) => {
+      const copy = button.querySelector(`.${SKILL_COPY_CLASS}`);
+      if (!copy || !copy.parentElement) return;
+      while (copy.firstChild) copy.parentElement.insertBefore(copy.firstChild, copy);
+      copy.remove();
+    };
+
+    const wrapSkillRow = (button) => {
+      const inner = button.firstElementChild;
+      if (!(inner instanceof HTMLElement)) return;
+      if (inner.querySelector(`.${SKILL_COPY_CLASS}`)) return;
+      const children = Array.from(inner.children);
+      const title = children.find(
+        (node) =>
+          node instanceof HTMLElement &&
+          node.tagName === "DIV" &&
+          normText(node).length > 0,
+      );
+      const description = children.find(
+        (node) =>
+          node instanceof HTMLElement &&
+          node.tagName === "SPAN" &&
+          String(node.className).includes("text-token-description-foreground"),
+      );
+      if (!title || !description) return;
+      const copy = document.createElement("div");
+      copy.className = SKILL_COPY_CLASS;
+      inner.insertBefore(copy, title);
+      copy.appendChild(title);
+      copy.appendChild(description);
+    };
+
+    const sourceCommandRows = (scroller) =>
+      Array.from(scroller.querySelectorAll('[data-list-navigation-item="true"]')).filter(
+        (row) =>
+          row instanceof HTMLElement &&
+          !row.closest(`[${FAVORITES_GROUP_ATTR}="true"]`) &&
+          !row.hasAttribute(FAVORITE_CLONE_ATTR),
+      );
+
+    const syncSectionVisibility = (scroller) => {
+      Array.from(scroller.children).forEach((group) => {
+        if (!(group instanceof HTMLElement) || group.hasAttribute(TOPBAR_ATTR)) return;
+        const rows = Array.from(
+          group.querySelectorAll('[data-list-navigation-item="true"]'),
+        ).filter((row) => row instanceof HTMLElement);
+        const hasVisibleRows = rows.some(
+          (row) => !row.hasAttribute(FAVORITE_DUPLICATE_HIDDEN_ATTR),
+        );
+        group.setAttribute(SECTION_EMPTY_ATTR, hasVisibleRows ? "false" : "true");
+      });
+    };
+
+    const syncFavoriteSourceVisibility = (scroller, favoriteKeys = new Set()) => {
+      const hideDuplicates = isSlashSearchActive() && favoriteKeys.size > 0;
+      let hiddenSelectedKey = "";
+      sourceCommandRows(scroller).forEach((row) => {
+        const key = row.getAttribute(FAVORITE_KEY_ATTR) || rowFavoriteKey(row);
+        if (hideDuplicates && key && favoriteKeys.has(key)) {
+          if (row.getAttribute("aria-selected") === "true") hiddenSelectedKey = key;
+          row.setAttribute(FAVORITE_DUPLICATE_HIDDEN_ATTR, "true");
+        } else {
+          row.removeAttribute(FAVORITE_DUPLICATE_HIDDEN_ATTR);
+        }
+      });
+      syncSectionVisibility(scroller);
+      if (!hiddenSelectedKey) return;
+      const favorite = favoriteRows(scroller).find(
+        (row) => row.getAttribute(FAVORITE_KEY_ATTR) === hiddenSelectedKey,
+      );
+      if (favorite instanceof HTMLElement) selectNavigationRow(scroller, favorite);
+    };
+
+    const syncFavoriteControls = (scroller) => {
+      const favorites = readFavorites();
+      sourceCommandRows(scroller).forEach((row) => {
+        const key = row.getAttribute(FAVORITE_KEY_ATTR) || rowFavoriteKey(row);
+        ensureFavoriteControl(row, key, favorites);
+      });
+      scroller
+        .querySelectorAll(`[${FAVORITE_CLONE_ATTR}="true"]`)
+        .forEach((row) => {
+          if (!(row instanceof HTMLElement)) return;
+          stripNativeCommandState(row);
+          const key = row.getAttribute(FAVORITE_KEY_ATTR) || rowFavoriteKey(row, "favorites");
+          ensureFavoriteControl(row, key, favorites);
+        });
+    };
+
+    const removeFavoriteSection = (scroller) => {
+      scroller
+        .querySelectorAll(`:scope > [${FAVORITES_GROUP_ATTR}="true"]`)
+        .forEach((group) => group.remove());
+      syncFavoriteSourceVisibility(scroller);
+      syncSectionVisibility(scroller);
+      delete scroller.dataset.codexppSlashFavoriteSelectionReady;
+      delete scroller.dataset.codexppSlashFavoriteSelectionTouched;
+    };
+
+    const syncFavoritesSection = (scroller) => {
+      const favorites = readFavorites();
+      const rowsByKey = new Map();
+      sourceCommandRows(scroller).forEach((row) => {
+        const key = row.getAttribute(FAVORITE_KEY_ATTR) || rowFavoriteKey(row);
+        if (key && favorites.has(key) && !rowsByKey.has(key)) rowsByKey.set(key, row);
+      });
+      const entries = Array.from(rowsByKey.entries());
+      if (entries.length === 0) {
+        removeFavoriteSection(scroller);
+        return;
+      }
+      const entryKeys = new Set(entries.map(([key]) => key));
+      syncFavoriteSourceVisibility(scroller, entryKeys);
+
+      let group = scroller.querySelector(`:scope > [${FAVORITES_GROUP_ATTR}="true"]`);
+      if (!(group instanceof HTMLElement)) {
+        group = document.createElement("div");
+        group.setAttribute(FAVORITES_GROUP_ATTR, "true");
+        scroller.insertBefore(group, scroller.firstElementChild);
+      } else if (group !== scroller.firstElementChild) {
+        scroller.insertBefore(group, scroller.firstElementChild);
+      }
+
+      const signature = entries.map(([key]) => key).join("|");
+      if (group.dataset.signature === signature) return;
+      group.dataset.signature = signature;
+      delete scroller.dataset.codexppSlashFavoriteSelectionReady;
+      delete scroller.dataset.codexppSlashFavoriteSelectionTouched;
+      group.replaceChildren();
+
+      const header = document.createElement("div");
+      header.className = "sticky top-0";
+      header.textContent = "Favorites";
+      group.appendChild(header);
+
+      entries.forEach(([key, sourceRow]) => {
+        const clone = sourceRow.cloneNode(true);
+        if (!(clone instanceof HTMLElement)) return;
+        clone.setAttribute(FAVORITE_CLONE_ATTR, "true");
+        clone.setAttribute(FAVORITE_KEY_ATTR, key);
+        clone.setAttribute(
+          FAVORITE_SOURCE_SECTION_ATTR,
+          sourceRow.getAttribute(SECTION_ATTR) || "",
+        );
+        stripNativeCommandState(clone);
+        clone.removeAttribute("aria-selected");
+        clone.querySelectorAll(`.${FAVORITE_BUTTON_CLASS}`).forEach((node) => node.remove());
+        ["pointermove", "mousemove", "mouseover"].forEach((type) => {
+          clone.addEventListener(type, (event) => {
+            event.stopPropagation();
+          });
+        });
+        clone.addEventListener("click", (event) => {
+          if (event.target instanceof HTMLElement && event.target.closest(`.${FAVORITE_BUTTON_CLASS}`)) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          sourceRow.click();
+        });
+        clone.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          event.stopPropagation();
+          sourceRow.click();
+        });
+        group.appendChild(clone);
+      });
+    };
+
+    const navigationRows = (scroller) =>
+      Array.from(scroller.querySelectorAll('[data-list-navigation-item="true"]')).filter(
+        (row) => row instanceof HTMLElement && row.offsetParent !== null,
+      );
+
+    const favoriteRows = (scroller) =>
+      Array.from(
+        scroller.querySelectorAll(
+          `[${FAVORITES_GROUP_ATTR}="true"] [data-list-navigation-item="true"]`,
+        ),
+      ).filter((row) => row instanceof HTMLElement && row.offsetParent !== null);
+
+    const selectedNavigationRow = (scroller) =>
+      navigationRows(scroller).find(
+        (row) => row.getAttribute("aria-selected") === "true",
+      );
+
+    const reconcileFavoriteSelection = (scroller) => {
+      const rows = navigationRows(scroller);
+      const selected = rows.filter((row) => row.getAttribute("aria-selected") === "true");
+      if (selected.length <= 1) return;
+      const favoriteSelected =
+        selected.find((row) => row.hasAttribute(FAVORITE_CLONE_ATTR)) || selected[0];
+      rows.forEach((row) =>
+        row.setAttribute("aria-selected", row === favoriteSelected ? "true" : "false"),
+      );
+    };
+
+    const selectNavigationRow = (scroller, row) => {
+      if (!(row instanceof HTMLElement)) return;
+      const menu = scroller.closest(`[${MENU_ATTR}="true"]`);
+      menu?.setAttribute(INPUT_MODE_ATTR, "keyboard");
+      navigationRows(scroller).forEach((item) =>
+        item.setAttribute("aria-selected", item === row ? "true" : "false"),
+      );
+      row.scrollIntoView({ block: "nearest" });
+      updateTopbar(scroller);
+    };
+
+    const ensureInitialFavoriteSelection = (scroller) => {
+      if (scroller.dataset.codexppSlashFavoriteSelectionReady === "true") return;
+      const firstFavorite = favoriteRows(scroller)[0];
+      if (!(firstFavorite instanceof HTMLElement)) return;
+      selectNavigationRow(scroller, firstFavorite);
+      scroller.dataset.codexppSlashFavoriteSelectionReady = "true";
+      const keepFavoriteSelected = () => {
+        if (!scroller.isConnected) return;
+        if (scroller.dataset.codexppSlashFavoriteSelectionTouched === "true") return;
+        const nextFirstFavorite = favoriteRows(scroller)[0];
+        if (!(nextFirstFavorite instanceof HTMLElement)) return;
+        if (selectedNavigationRow(scroller) !== nextFirstFavorite) {
+          selectNavigationRow(scroller, nextFirstFavorite);
+        }
+      };
+      requestAnimationFrame(keepFavoriteSelected);
+      window.setTimeout(keepFavoriteSelected, 80);
+    };
+
+    const handleFavoriteNavigationKey = (event, scroller) => {
+      const rows = navigationRows(scroller);
+      const favs = favoriteRows(scroller);
+      if (rows.length === 0 || favs.length === 0) return false;
+
+      if (event.key === "Enter") {
+        const selected = selectedNavigationRow(scroller);
+        if (!(selected instanceof HTMLElement)) return false;
+        scroller.dataset.codexppSlashFavoriteSelectionTouched = "true";
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        selected.click();
+        return true;
+      }
+
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return false;
+      scroller.dataset.codexppSlashFavoriteSelectionTouched = "true";
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+
+      const selected = selectedNavigationRow(scroller);
+      const currentIndex = selected instanceof HTMLElement ? rows.indexOf(selected) : -1;
+      const fallbackIndex = event.key === "ArrowDown" ? 0 : rows.length - 1;
+      const nextIndex =
+        currentIndex < 0
+          ? fallbackIndex
+          : event.key === "ArrowDown"
+            ? Math.min(rows.length - 1, currentIndex + 1)
+            : Math.max(0, currentIndex - 1);
+      selectNavigationRow(scroller, rows[nextIndex]);
+      return true;
+    };
+
+    const cleanupMenu = (menu) => {
+      const overlay = menu.closest('[data-composer-overlay-floating-ui="true"]');
+      const scroller = menu.querySelector(".vertical-scroll-fade-mask");
+      if (scroller instanceof HTMLElement) {
+        const scrollHandler = scrollHandlers.get(scroller);
+        if (scrollHandler) {
+          scroller.removeEventListener("scroll", scrollHandler);
+          scrollHandlers.delete(scroller);
+        }
+        const animation = scrollAnimations.get(scroller);
+        if (animation) {
+          cancelAnimationFrame(animation);
+          scrollAnimations.delete(scroller);
+        }
+        const pointerHandler = pointerHandlers.get(scroller);
+        if (pointerHandler) {
+          scroller.removeEventListener("pointermove", pointerHandler);
+          scroller.removeEventListener("pointerdown", pointerHandler);
+          pointerHandlers.delete(scroller);
+        }
+      }
+      if (scroller instanceof HTMLElement) removeFavoriteSection(scroller);
+      menu.removeAttribute(MENU_ATTR);
+      menu.removeAttribute(INPUT_MODE_ATTR);
+      menu.removeAttribute(PROGRAM_SCROLL_ATTR);
+      menu.querySelectorAll(`[${TOPBAR_ATTR}]`).forEach((node) => node.remove());
+      menu.querySelectorAll(`.${FAVORITE_BUTTON_CLASS}`).forEach((node) => node.remove());
+      menu.querySelectorAll(`.${SKILL_COPY_CLASS}`).forEach((copy) => {
+        if (!(copy instanceof HTMLElement) || !copy.parentElement) return;
+        while (copy.firstChild) copy.parentElement.insertBefore(copy.firstChild, copy);
+        copy.remove();
+      });
+      menu
+        .querySelectorAll(
+          `[${FAVORITE_KEY_ATTR}], [${FAVORITE_CLONE_ATTR}], [${FAVORITE_SOURCE_SECTION_ATTR}], [${FAVORITE_DUPLICATE_HIDDEN_ATTR}]`,
+        )
+        .forEach((node) => {
+          node.removeAttribute(FAVORITE_KEY_ATTR);
+          node.removeAttribute(FAVORITE_CLONE_ATTR);
+          node.removeAttribute(FAVORITE_SOURCE_SECTION_ATTR);
+          node.removeAttribute(FAVORITE_DUPLICATE_HIDDEN_ATTR);
+        });
+      menu
+        .querySelectorAll(`[${SECTION_ATTR}]`)
+        .forEach((node) => {
+          node.removeAttribute(SECTION_ATTR);
+          node.removeAttribute(SECTION_EMPTY_ATTR);
+        });
+      if (overlay && !overlay.querySelector(`[${MENU_ATTR}="true"]`)) {
+        overlay.removeAttribute(OVERLAY_ATTR);
+        markOverlayNoise(overlay);
+      }
+    };
+
+    const isSlashMenu = (menu) => {
+      if (!menu.closest('[data-composer-overlay-floating-ui="true"]')) return false;
+      if (isEmptySlashMenu(menu)) return true;
+      const scroller = menu.querySelector(".vertical-scroll-fade-mask");
+      if (!(scroller instanceof HTMLElement)) return false;
+      if (
+        isSlashQueryActive() &&
+        menu.querySelectorAll('[data-list-navigation-item="true"]').length > 0
+      ) {
+        return true;
+      }
+      return Array.from(scroller.children).some((group) => {
+        if (!(group instanceof HTMLElement)) return false;
+        const rows = group.querySelectorAll('[data-list-navigation-item="true"]');
+        if (rows.length < 2) return false;
+        const header = group.querySelector(":scope > .sticky.top-0");
+        const headerText = normText(header);
+        if (!/^Skills\b/i.test(headerText)) return false;
+        return Array.from(rows).some((row) =>
+          row.querySelector(
+            '.text-token-description-foreground, span[class*="text-token-description-foreground"]',
+          ),
+        );
+      });
+    };
+
+    const isSlashQueryActive = () =>
+      Array.from(document.querySelectorAll('.ProseMirror[contenteditable="true"]')).some(
+        (editor) => editor instanceof HTMLElement && normText(editor).startsWith("/"),
+      );
+
+    const isEmptySlashMenu = (menu) =>
+      isSlashQueryActive() &&
+      menu.querySelectorAll('[data-list-navigation-item="true"]').length === 0 &&
+      /^No commands$/i.test(normText(menu));
+
+    const buildTopbar = (menu, scroller) => {
+      let topbar = menu.querySelector(`:scope > [${TOPBAR_ATTR}="true"]`);
+      if (topbar instanceof HTMLElement) return topbar;
+      topbar = document.createElement("div");
+      topbar.setAttribute(TOPBAR_ATTR, "true");
+      topbar.innerHTML =
+        `<div ${SECTION_TITLE_ATTR}="true">General</div>` +
+        '<div class="codexpp-slash-section-icons"></div>';
+      menu.insertBefore(topbar, scroller);
+      return topbar;
+    };
+
+    const setTopbarTitle = (title, text) => {
+      if (!(title instanceof HTMLElement) || title.textContent === text) return;
+      title.textContent = text;
+      title.setAttribute("data-changing", "true");
+      const previousTimer = titleTimers.get(title);
+      if (previousTimer) window.clearTimeout(previousTimer);
+      const timer = window.setTimeout(() => {
+        title.removeAttribute("data-changing");
+        titleTimers.delete(title);
+      }, 190);
+      titleTimers.set(title, timer);
+    };
+
+    const groupSections = (scroller) =>
+      Array.from(scroller.children)
+        .filter(
+          (node) =>
+            node instanceof HTMLElement &&
+            !node.hasAttribute(TOPBAR_ATTR) &&
+            node.getAttribute(SECTION_EMPTY_ATTR) !== "true" &&
+            node.querySelector('[data-list-navigation-item="true"]'),
+        )
+        .map((group, index) => {
+          const header = group.querySelector(":scope > .sticky.top-0");
+          const isFavorites = group.hasAttribute(FAVORITES_GROUP_ATTR);
+          const title = isFavorites ? "Favorites" : normText(header) || "General";
+          const key = sectionKey(title);
+          const color = sectionColor(key, index);
+          const favorites = readFavorites();
+          group.setAttribute(SECTION_ATTR, key);
+          group.dataset.codexppSlashSectionTitle = title;
+          group.style.setProperty("--codexpp-section-color", color);
+          group.querySelectorAll('[data-list-navigation-item="true"]').forEach((button) => {
+            if (!(button instanceof HTMLElement)) return;
+            if (button.hasAttribute(FAVORITE_CLONE_ATTR)) stripNativeCommandState(button);
+            button.setAttribute(SECTION_ATTR, key);
+            button.style.setProperty("--codexpp-section-color", color);
+            const visualKey =
+              button.getAttribute(FAVORITE_SOURCE_SECTION_ATTR) ||
+              button.getAttribute(SECTION_ATTR) ||
+              key;
+            if (visualKey === "skills") wrapSkillRow(button);
+            else unwrapSkillRow(button);
+            const favoriteKey =
+              button.getAttribute(FAVORITE_KEY_ATTR) || rowFavoriteKey(button, key);
+            ensureFavoriteControl(button, favoriteKey, favorites);
+          });
+          return { group, title, key, color };
+        });
+
+    const renderTopbarIcons = (topbar, sections) => {
+      const icons = topbar.querySelector(".codexpp-slash-section-icons");
+      if (!(icons instanceof HTMLElement)) return;
+      const signature = sections.map((s) => `${s.key}:${s.title}`).join("|");
+      if (icons.dataset.signature === signature) return;
+      icons.dataset.signature = signature;
+      icons.replaceChildren();
+      for (const section of sections) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.setAttribute(SECTION_ICON_ATTR, section.key);
+        button.setAttribute("aria-label", section.title);
+        button.style.setProperty("--codexpp-section-color", section.color);
+        button.innerHTML = sectionIconSvg(section.key);
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const scroller = topbar.nextElementSibling;
+          if (!(scroller instanceof HTMLElement)) return;
+          scrollToSection(scroller, section, sections);
+          updateTopbar(scroller, sections);
+        });
+        icons.appendChild(button);
+      }
+    };
+
+    const scrollToSection = (scroller, section, sections = groupSections(scroller)) => {
+      const menu = scroller.closest(`[${MENU_ATTR}="true"]`);
+      menu?.setAttribute(INPUT_MODE_ATTR, "keyboard");
+      menu?.setAttribute(PROGRAM_SCROLL_ATTR, "true");
+      scroller.scrollLeft = 0;
+      const targetTop = sectionTop(scroller, section.group);
+      const adjustedTop =
+        sections.indexOf(section) > 0
+          ? Math.min(targetTop + 1, scroller.scrollHeight - scroller.clientHeight)
+          : targetTop;
+      const topbar = scroller.previousElementSibling;
+      if (topbar instanceof HTMLElement) {
+        topbar.dataset.forcedActiveSection = section.key;
+      }
+      updateTopbar(scroller, sections);
+      animateScrollTop(
+        scroller,
+        adjustedTop,
+        () => updateTopbar(scroller, sections),
+        () => {
+          menu?.removeAttribute(PROGRAM_SCROLL_ATTR);
+          if (topbar instanceof HTMLElement) delete topbar.dataset.forcedActiveSection;
+          updateTopbar(scroller, sections);
+        },
+      );
+      updateTopbar(scroller, sections);
+    };
+
+    const sectionTop = (scroller, group) => {
+      const target =
+        scroller.scrollTop +
+        group.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top;
+      return Math.max(0, Math.min(target, scroller.scrollHeight - scroller.clientHeight));
+    };
+
+    const animateScrollTop = (scroller, targetTop, onStep, onDone) => {
+      const previous = scrollAnimations.get(scroller);
+      if (previous) cancelAnimationFrame(previous);
+      const startTop = scroller.scrollTop;
+      const delta = targetTop - startTop;
+      if (Math.abs(delta) < 1) {
+        scroller.scrollTop = targetTop;
+        onStep?.();
+        onDone?.();
+        return;
+      }
+      const start = performance.now();
+      const duration = 260;
+      const tick = (now) => {
+        const progress = Math.min(1, (now - start) / duration);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        scroller.scrollTop = startTop + delta * eased;
+        onStep?.();
+        if (progress < 1) {
+          scrollAnimations.set(scroller, requestAnimationFrame(tick));
+        } else {
+          scrollAnimations.delete(scroller);
+          onDone?.();
+        }
+      };
+      scrollAnimations.set(scroller, requestAnimationFrame(tick));
+    };
+
+    const updateTopbar = (scroller, sections = groupSections(scroller)) => {
+      const topbar = scroller.previousElementSibling;
+      if (!(topbar instanceof HTMLElement) || !topbar.hasAttribute(TOPBAR_ATTR)) return;
+      if (!(topbar instanceof HTMLElement) || sections.length === 0) return;
+      const threshold = scroller.scrollTop + 4;
+      let active = sections[0];
+      for (const section of sections) {
+        if (sectionTop(scroller, section.group) <= threshold) active = section;
+      }
+      if (topbar.dataset.forcedActiveSection) {
+        active =
+          sections.find((section) => section.key === topbar.dataset.forcedActiveSection) ||
+          active;
+      }
+      const title = topbar.querySelector(`[${SECTION_TITLE_ATTR}]`);
+      setTopbarTitle(title, active.title);
+      topbar.dataset.activeSection = active.key;
+      topbar.style.setProperty("--codexpp-section-color", active.color);
+      topbar
+        .querySelectorAll(`[${SECTION_ICON_ATTR}]`)
+        .forEach((button) =>
+          button.setAttribute(
+            "data-active",
+            button.getAttribute(SECTION_ICON_ATTR) === active.key ? "true" : "false",
+          ),
+        );
+    };
+
+    const enhanceMenu = (menu) => {
+      if (!isSlashMenu(menu)) {
+        cleanupMenu(menu);
+        return;
+      }
+      menu.setAttribute(MENU_ATTR, "true");
+      menu.closest('[data-composer-overlay-floating-ui="true"]')?.setAttribute(OVERLAY_ATTR, "true");
+      pruneMenuNoise(menu);
+      if (isEmptySlashMenu(menu)) {
+        menu.querySelectorAll(`[${TOPBAR_ATTR}]`).forEach((node) => node.remove());
+        return;
+      }
+      const scroller = menu.querySelector(".vertical-scroll-fade-mask");
+      if (!(scroller instanceof HTMLElement)) {
+        menu.querySelectorAll(`[${TOPBAR_ATTR}]`).forEach((node) => node.remove());
+        return;
+      }
+      scroller.scrollLeft = 0;
+      const topbar = buildTopbar(menu, scroller);
+      groupSections(scroller);
+      syncFavoritesSection(scroller);
+      const sections = groupSections(scroller);
+      renderTopbarIcons(topbar, sections);
+      updateTopbar(scroller, sections);
+      ensureInitialFavoriteSelection(scroller);
+      reconcileFavoriteSelection(scroller);
+      if (!scrollHandlers.has(scroller)) {
+        const handler = () => updateTopbar(scroller);
+        scroller.addEventListener("scroll", handler, { passive: true });
+        scrollHandlers.set(scroller, handler);
+      }
+      if (!pointerHandlers.has(scroller)) {
+        const handler = (event) => {
+          if (menu.hasAttribute(PROGRAM_SCROLL_ATTR)) return;
+          if (event.type === "pointermove") return;
+          menu.setAttribute(INPUT_MODE_ATTR, "pointer");
+        };
+        scroller.addEventListener("pointermove", handler, { passive: true });
+        scroller.addEventListener("pointerdown", handler, { passive: true });
+        pointerHandlers.set(scroller, handler);
+      }
+    };
+
+    const activeSlashMenu = () =>
+      Array.from(document.querySelectorAll(`[${MENU_ATTR}="true"]`)).find(
+        (menu) =>
+          menu instanceof HTMLElement &&
+          menu.isConnected &&
+          menu.querySelector(".vertical-scroll-fade-mask"),
+      );
+
+    const keyDigit = (event) => {
+      const key = String(event.key || "");
+      if (/^[1-9]$/.test(key)) return Number(key);
+      const code = String(event.code || "");
+      const match = /^(?:Digit|Numpad)([1-9])$/.exec(code);
+      return match ? Number(match[1]) : 0;
+    };
+
+    const onSectionShortcut = (event) => {
+      const menu = activeSlashMenu();
+      if (!(menu instanceof HTMLElement)) return;
+      const scroller = menu.querySelector(".vertical-scroll-fade-mask");
+      if (!(scroller instanceof HTMLElement)) return;
+
+      if (handleFavoriteNavigationKey(event, scroller)) return;
+
+      if (
+        event.key === "ArrowDown" ||
+        event.key === "ArrowUp" ||
+        event.key === "Home" ||
+        event.key === "End" ||
+        event.key === "PageDown" ||
+        event.key === "PageUp"
+      ) {
+        menu.setAttribute(INPUT_MODE_ATTR, "keyboard");
+        return;
+      }
+
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      const digit = keyDigit(event);
+      activateSectionByDigit(scroller, digit, event);
+    };
+
+    const onSectionShortcutBridge = (event) => {
+      const menu = activeSlashMenu();
+      if (!(menu instanceof HTMLElement)) return;
+      const scroller = menu.querySelector(".vertical-scroll-fade-mask");
+      if (!(scroller instanceof HTMLElement)) return;
+      activateSectionByDigit(scroller, Number(event.detail?.digit) || 0, event);
+    };
+
+    const activateSectionByDigit = (scroller, digit, event) => {
+      if (!digit) return;
+      const sections = groupSections(scroller);
+      const section = sections[digit - 1];
+      if (!section) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      scrollToSection(scroller, section, sections);
+    };
+
+    const scan = () => {
+      scanFrame = 0;
+      try {
+        pruneHomeContentNoise();
+      } catch {
+        // Ignore transient DOM shapes while Codex is replacing the slash panel.
+      }
+      document
+        .querySelectorAll('[data-composer-overlay-floating-ui="true"]')
+        .forEach((overlay) => {
+          if (!(overlay instanceof HTMLElement)) return;
+          try {
+            pruneOverlayNoise(overlay);
+            markOverlayNoise(overlay);
+          } catch {
+            // Keep the observer alive if Codex swaps the overlay mid-scan.
+          }
+        });
+      document
+        .querySelectorAll('[data-composer-overlay-floating-ui="true"] > *')
+        .forEach((menu) => {
+          if (!(menu instanceof HTMLElement)) return;
+          try {
+            enhanceMenu(menu);
+          } catch {
+            // Keep scanning other candidates.
+          }
+        });
+    };
+
+    const scheduleScan = () => {
+      if (scanFrame) return;
+      scanFrame = requestAnimationFrame(scan);
+    };
+
+    const scheduleSlashWork = () => {
+      scheduleHomeContentPrune();
+      scheduleHardPruneNoise();
+      scheduleScan();
+    };
+
+    scan();
+    observer = new MutationObserver(scheduleSlashWork);
+    observer.observe(document.body, OBSERVER_OPTIONS);
+    document.addEventListener("input", scheduleSlashWork, true);
+    document.addEventListener("keyup", scheduleSlashWork, true);
+    window.addEventListener("codexpp-slash-section-shortcut", onSectionShortcutBridge);
+    window.addEventListener("keydown", onSectionShortcut, true);
+    document.addEventListener("keydown", onSectionShortcut, true);
+    const activeSlashInterval = window.setInterval(() => {
+      if (isSlashQueryActive()) scheduleSlashWork();
+    }, 250);
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      window.clearInterval(activeSlashInterval);
+      if (scanFrame) cancelAnimationFrame(scanFrame);
+      if (homePruneFrame) cancelAnimationFrame(homePruneFrame);
+      if (hardPruneTimer) window.clearTimeout(hardPruneTimer);
+      document.removeEventListener("input", scheduleSlashWork, true);
+      document.removeEventListener("keyup", scheduleSlashWork, true);
+      window.removeEventListener("codexpp-slash-section-shortcut", onSectionShortcutBridge);
+      window.removeEventListener("keydown", onSectionShortcut, true);
+      document.removeEventListener("keydown", onSectionShortcut, true);
+      for (const [scroller, handler] of scrollHandlers) {
+        scroller.removeEventListener("scroll", handler);
+      }
+      scrollHandlers.clear();
+      for (const [scroller, handler] of pointerHandlers) {
+        scroller.removeEventListener("pointermove", handler);
+        scroller.removeEventListener("pointerdown", handler);
+      }
+      pointerHandlers.clear();
+      for (const animation of scrollAnimations.values()) {
+        cancelAnimationFrame(animation);
+      }
+      scrollAnimations.clear();
+      for (const timer of titleTimers.values()) window.clearTimeout(timer);
+      titleTimers.clear();
+      document
+        .querySelectorAll(`[${FAVORITES_GROUP_ATTR}]`)
+        .forEach((node) => node.remove());
+      document.querySelectorAll(`.${FAVORITE_BUTTON_CLASS}`).forEach((node) => node.remove());
+      document.querySelectorAll(`.${SKILL_COPY_CLASS}`).forEach((copy) => {
+        if (!(copy instanceof HTMLElement) || !copy.parentElement) return;
+        while (copy.firstChild) copy.parentElement.insertBefore(copy.firstChild, copy);
+        copy.remove();
+      });
+      document.querySelectorAll(`[${TOPBAR_ATTR}]`).forEach((node) => node.remove());
+      document
+        .querySelectorAll(`[${MENU_ATTR}]`)
+        .forEach((node) => node.removeAttribute(MENU_ATTR));
+      document
+        .querySelectorAll(`[${INPUT_MODE_ATTR}]`)
+        .forEach((node) => node.removeAttribute(INPUT_MODE_ATTR));
+      document
+        .querySelectorAll(`[${PROGRAM_SCROLL_ATTR}]`)
+        .forEach((node) => node.removeAttribute(PROGRAM_SCROLL_ATTR));
+      document
+        .querySelectorAll(`[${OVERLAY_ATTR}]`)
+        .forEach((node) => node.removeAttribute(OVERLAY_ATTR));
+      document
+        .querySelectorAll(`[${OVERLAY_NOISE_ATTR}]`)
+        .forEach((node) => node.removeAttribute(OVERLAY_NOISE_ATTR));
+      document
+        .querySelectorAll(`[${SECTION_ATTR}]`)
+        .forEach((node) => {
+          node.removeAttribute(SECTION_ATTR);
+          node.removeAttribute(SECTION_EMPTY_ATTR);
+        });
+      document
+        .querySelectorAll(
+          `[${FAVORITE_KEY_ATTR}], [${FAVORITE_CLONE_ATTR}], [${FAVORITE_SOURCE_SECTION_ATTR}], [${FAVORITE_DUPLICATE_HIDDEN_ATTR}]`,
+        )
+        .forEach((node) => {
+          node.removeAttribute(FAVORITE_KEY_ATTR);
+          node.removeAttribute(FAVORITE_CLONE_ATTR);
+          node.removeAttribute(FAVORITE_SOURCE_SECTION_ATTR);
+          node.removeAttribute(FAVORITE_DUPLICATE_HIDDEN_ATTR);
+        });
       style.remove();
     };
   },
@@ -2331,7 +3971,6 @@ const FEATURES = {
       "[data-sidebar-thread-pinned]",
     ].join(", ");
     const selectedIds = new Set();
-    const rowHandlers = new Map();
     let disposed = false;
     let lastAnchorId = null;
     let actionInProgress = false;
@@ -2520,34 +4159,9 @@ const FEATURES = {
         });
       for (const record of rows) {
         record.row.setAttribute(ROW_ATTR, "true");
-        bindRowHandlers(record.row);
         if (!selectedIds.has(record.id)) continue;
         record.row.setAttribute(SELECTED_ATTR, "true");
         record.target?.setAttribute?.(TARGET_ATTR, "true");
-      }
-      reconcileRowHandlers(rows);
-    };
-
-    const bindRowHandlers = (row) => {
-      if (!(row instanceof HTMLElement) || rowHandlers.has(row)) return;
-      const pointer = (event) => onPointerDown(event);
-      const context = (event) => onContextMenu(event);
-      row.addEventListener("pointerdown", pointer, true);
-      row.addEventListener("mousedown", pointer, true);
-      row.addEventListener("contextmenu", context, true);
-      rowHandlers.set(row, () => {
-        row.removeEventListener("pointerdown", pointer, true);
-        row.removeEventListener("mousedown", pointer, true);
-        row.removeEventListener("contextmenu", context, true);
-      });
-    };
-
-    const reconcileRowHandlers = (rows) => {
-      const active = new Set(rows.map((record) => record.row));
-      for (const [row, dispose] of Array.from(rowHandlers.entries())) {
-        if (active.has(row) && row.isConnected) continue;
-        dispose();
-        rowHandlers.delete(row);
       }
     };
 
@@ -2785,8 +4399,6 @@ const FEATURES = {
       document.removeEventListener("keydown", onKeyDown, true);
       closeNativeMenu();
       selectedIds.clear();
-      for (const dispose of rowHandlers.values()) dispose();
-      rowHandlers.clear();
       document
         .querySelectorAll(`[${ROW_ATTR}], [${SELECTED_ATTR}], [${TARGET_ATTR}]`)
         .forEach((node) => {
@@ -3477,7 +5089,6 @@ const FEATURES = {
     const colorPrefsCacheKey = "__codexppSidebarProjectColorPrefs";
     let colorPrefs = readColorPrefs();
     window[colorPrefsCacheKey] = colorPrefs;
-    const rowHandlers = new Map();
     let pendingContextMenu = null;
     let menu = null;
     let disposed = false;
@@ -3673,10 +5284,6 @@ const FEATURES = {
         .filter((node, index, rows) => rows.indexOf(node) === index);
 
     const clearMarks = () => {
-      for (const [, record] of rowHandlers) {
-        record.dispose?.();
-      }
-      rowHandlers.clear();
       document.querySelectorAll(`[${ATTR}]`).forEach((node) => {
         if (!(node instanceof Element)) return;
         node.removeAttribute(ATTR);
@@ -3731,7 +5338,6 @@ const FEATURES = {
         setOptionalStyleVar(row, "--codexpp-project-blue-token-override", blueTokenOverrideFor(label));
         setOptionalStyleVar(row, "--codexpp-project-link-token-override", linkTokenOverrideFor(label));
         markProjectParts(row, label);
-        if (!rowHandlers.has(row)) bindColorMenu(row, label);
       }
     };
 
@@ -3829,40 +5435,6 @@ const FEATURES = {
       );
     };
 
-    const bindColorMenu = (row, label) => {
-      const existing = rowHandlers.get(row);
-      const overflowButton = findProjectOverflowButton(row, label);
-      if (existing?.label === label && existing?.overflowButton === overflowButton) {
-        return;
-      }
-      existing?.dispose?.();
-
-      const contextHandler = (event) => {
-        seedProjectMenu(label, event, row, row);
-      };
-      const overflowHandler = (event) => {
-        seedProjectMenu(label, event, overflowButton, row);
-      };
-
-      row.addEventListener("contextmenu", contextHandler);
-      if (overflowButton) {
-        overflowButton.addEventListener("pointerdown", overflowHandler, true);
-        overflowButton.addEventListener("click", overflowHandler, true);
-      }
-
-      rowHandlers.set(row, {
-        label,
-        overflowButton,
-        dispose() {
-          row.removeEventListener("contextmenu", contextHandler);
-          if (overflowButton) {
-            overflowButton.removeEventListener("pointerdown", overflowHandler, true);
-            overflowButton.removeEventListener("click", overflowHandler, true);
-          }
-        },
-      });
-    };
-
     const findProjectOverflowButton = (row, label) =>
       Array.from(row.querySelectorAll("button, [role='button']"))
         .filter((node) => isProjectOverflowButton(row, label, node))
@@ -3894,6 +5466,12 @@ const FEATURES = {
       const label = labelFor(row);
       if (!isProjectOverflowButton(row, label, button)) return;
       seedProjectMenu(label, event, button, row);
+    };
+
+    const onProjectContextMenu = (event) => {
+      const row = event.target?.closest?.("div[role='listitem'][aria-label]");
+      if (!isProjectRow(row)) return;
+      seedProjectMenu(labelFor(row), event, row, row);
     };
 
     const openColorMenu = (label, x, y, anchor) => {
@@ -4221,12 +5799,11 @@ const FEATURES = {
 
     const reconcileMarkedRows = (rows) => {
       const active = new Set(rows);
-      for (const [row, record] of Array.from(rowHandlers.entries())) {
-        if (active.has(row) && row.isConnected) continue;
-        record.dispose?.();
-        rowHandlers.delete(row);
+      document.querySelectorAll(`[${ATTR}="row"]`).forEach((row) => {
+        if (!(row instanceof HTMLElement)) return;
+        if (active.has(row) && row.isConnected) return;
         clearRowMarks(row);
-      }
+      });
     };
 
     const clearRowMarks = (row) => {
@@ -4278,6 +5855,7 @@ const FEATURES = {
     );
     const observer = new MutationObserver(scheduleApplySoon);
     observer.observe(document.body, { childList: true, subtree: true });
+    document.addEventListener("contextmenu", onProjectContextMenu, true);
     document.addEventListener("pointerdown", onProjectOverflowTrigger, true);
     document.addEventListener("click", onProjectOverflowTrigger, true);
     window.addEventListener("focus", scheduleApply);
@@ -4290,6 +5868,7 @@ const FEATURES = {
       observer.disconnect();
       if (childListFrame) cancelAnimationFrame(childListFrame);
       retryTimers.forEach((timer) => window.clearTimeout(timer));
+      document.removeEventListener("contextmenu", onProjectContextMenu, true);
       document.removeEventListener("pointerdown", onProjectOverflowTrigger, true);
       document.removeEventListener("click", onProjectOverflowTrigger, true);
       window.removeEventListener("focus", scheduleApply);
@@ -4311,6 +5890,9 @@ const FEATURES = {
     let metrics = [];
     let disposed = false;
     let scanScheduled = false;
+    let scanTimer = 0;
+    let lastScanAt = 0;
+    const SCAN_THROTTLE_MS = 500;
 
     const refreshMetrics = async () => {
       try {
@@ -4327,14 +5909,22 @@ const FEATURES = {
     const scheduleScan = () => {
       if (scanScheduled || disposed) return;
       scanScheduled = true;
-      requestAnimationFrame(() => {
-        scanScheduled = false;
-        scanMessages();
-      });
+      const delay = Math.max(0, SCAN_THROTTLE_MS - (Date.now() - lastScanAt));
+      const run = () => {
+        scanTimer = 0;
+        requestAnimationFrame(() => {
+          scanScheduled = false;
+          lastScanAt = Date.now();
+          scanMessages();
+        });
+      };
+      if (delay > 0) scanTimer = window.setTimeout(run, delay);
+      else run();
     };
 
     const scanMessages = () => {
       if (disposed || metrics.length === 0) return;
+      pruneMountedMessageMetrics();
       const nodes = document.querySelectorAll("div.group.flex.min-w-0.flex-col");
       for (const node of nodes) {
         if (!(node instanceof HTMLElement)) continue;
@@ -4358,6 +5948,14 @@ const FEATURES = {
       }
     };
 
+    const pruneMountedMessageMetrics = () => {
+      for (const [node, line] of Array.from(mounted.entries())) {
+        if (node.isConnected && line.isConnected) continue;
+        line.remove();
+        mounted.delete(node);
+      }
+    };
+
     const observer = new MutationObserver(scheduleScan);
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
@@ -4368,6 +5966,7 @@ const FEATURES = {
       disposed = true;
       observer.disconnect();
       window.clearInterval(timer);
+      if (scanTimer) window.clearTimeout(scanTimer);
       for (const [, line] of mounted) line.remove();
       mounted.clear();
     };
@@ -4387,6 +5986,8 @@ const PROJECT_LABEL_HANDLER_KEY = "__bennettUiImprovementsProjectLabelsHandler";
 const SIDEBAR_BATCH_MENU_GLOBAL_KEY = "__bennettUiImprovementsSidebarBatchMenu";
 const SIDEBAR_BATCH_MENU_HANDLER_KEY =
   "__bennettUiImprovementsSidebarBatchMenuHandler";
+const SLASH_MENU_SHORTCUT_BRIDGE_KEY =
+  "__bennettUiImprovementsSlashMenuShortcutBridge";
 
 function startMainMetricsProvider(api) {
   const service = createMetricsService(api);
@@ -4450,6 +6051,53 @@ function startMainSidebarBatchMenuProvider(api) {
   }
 
   api.log.info("[sidebar-chat-multi-select] main menu provider active");
+}
+
+function startMainSlashMenuShortcutBridge(api) {
+  const { app, webContents } = require("electron");
+  const state =
+    globalThis[SLASH_MENU_SHORTCUT_BRIDGE_KEY] || {
+      attached: new WeakSet(),
+      listenerRegistered: false,
+    };
+  globalThis[SLASH_MENU_SHORTCUT_BRIDGE_KEY] = state;
+
+  state.attach = (wc) => {
+    if (!wc || wc.isDestroyed?.() || state.attached.has(wc)) return;
+    state.attached.add(wc);
+    wc.on("before-input-event", (event, input = {}) => {
+      const digit = slashMenuShortcutDigit(input);
+      if (!digit) return;
+      const url = wc.getURL?.() || "";
+      if (!url.startsWith("app://") && !url.includes("codex")) return;
+      event.preventDefault();
+      wc.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent("codexpp-slash-section-shortcut", { detail: { digit: ${digit} } }))`,
+        true,
+      ).catch(() => {});
+    });
+  };
+
+  for (const wc of webContents.getAllWebContents()) state.attach(wc);
+
+  if (!state.listenerRegistered) {
+    app.on("web-contents-created", (_event, wc) => {
+      globalThis[SLASH_MENU_SHORTCUT_BRIDGE_KEY]?.attach?.(wc);
+    });
+    state.listenerRegistered = true;
+  }
+
+  api.log.info("[slash-menu-polish] main shortcut bridge active");
+}
+
+function slashMenuShortcutDigit(input = {}) {
+  if (input.type !== "keyDown") return 0;
+  if (!(input.meta || input.control) || input.alt || input.shift) return 0;
+  const key = String(input.key || "");
+  if (/^[1-9]$/.test(key)) return Number(key);
+  const code = String(input.code || "");
+  const match = /^(?:Digit|Numpad)([1-9])$/.exec(code);
+  return match ? Number(match[1]) : 0;
 }
 
 function showSidebarBatchMenu(payload) {
