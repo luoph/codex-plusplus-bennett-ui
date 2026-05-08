@@ -457,6 +457,11 @@ const FEATURES = {
     let bridgeRequestSeq = 0;
 
     const log = (...a) => api.log.info("[usage]", ...a);
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
 
     // ── parsing ────────────────────────────────────────────────────────
     const isVisibleElement = (node) => {
@@ -938,12 +943,22 @@ const FEATURES = {
      *
      * Returns the parent element to mount into, or null if not found.
      */
+    const findUsageSidebar = () => {
+      const sidebar = document.querySelector(ASIDE_SELECTOR);
+      if (!(sidebar instanceof HTMLElement)) return null;
+      if (!isVisibleElement(sidebar)) return null;
+      const rect = sidebar.getBoundingClientRect();
+      return rect.width >= 180 ? sidebar : null;
+    };
+
     const findSidebarSlot = () => {
+      const sidebar = findUsageSidebar();
+      if (!sidebar) return null;
       // Look for the (now hidden) upgrade pill via its prev-display marker.
-      const prev = document.querySelector('[data-codexpp-prev-display]');
+      const prev = sidebar.querySelector('[data-codexpp-prev-display]');
       if (prev && prev.parentElement) return prev.parentElement;
       // Fallback: any visible button literally labelled "Upgrade".
-      const btns = document.querySelectorAll('button, a');
+      const btns = sidebar.querySelectorAll('button, a');
       for (const b of btns) {
         const t = (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
         if (t === "upgrade") return b.parentElement;
@@ -953,7 +968,7 @@ const FEATURES = {
       if (!/\bWin/i.test(navigator.platform || navigator.userAgent || "")) {
         return null;
       }
-      const existingSlot = document.querySelector('[data-codexpp="usage-slot"]');
+      const existingSlot = sidebar.querySelector('[data-codexpp="usage-slot"]');
       if (existingSlot instanceof HTMLElement) return existingSlot;
       for (const b of btns) {
         const t = (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -985,6 +1000,15 @@ const FEATURES = {
       if (!snapshot || (!snapshot.fiveHour && !snapshot.weekly)) return;
       const slot = findSidebarSlot();
       if (!slot) {
+        if (mounted) {
+          mounted.remove();
+          mounted = null;
+        }
+        for (const stale of document.querySelectorAll(
+          '[data-codexpp="usage-box"], [data-codexpp="usage-boxes"]',
+        )) {
+          stale.remove();
+        }
         if (!ensureMounted._warned) {
           log("ensureMounted: no sidebar slot found yet");
           ensureMounted._warned = true;
@@ -3962,6 +3986,7 @@ const FEATURES = {
         width: 100% !important;
         min-width: 0 !important;
         min-height: calc(var(--spacing-token-button-composer, 2rem) * 2.15) !important;
+        padding: var(--spacing-3, 0.75rem) var(--spacing-3_5, 0.875rem) !important;
         color: var(--color-token-text-primary) !important;
         border: 1px solid color-mix(in srgb, currentColor 14%, transparent) !important;
         border-radius: var(--radius-lg, 0.5rem) !important;
@@ -3984,6 +4009,16 @@ const FEATURES = {
 
       [${ATTR}="button"] svg {
         flex-shrink: 0;
+      }
+
+      [${ATTR}="badge"] {
+        display: inline-flex !important;
+        position: absolute !important;
+        top: var(--spacing-2, 0.5rem) !important;
+        right: var(--spacing-2, 0.5rem) !important;
+        translate: none !important;
+        transform: none !important;
+        pointer-events: none !important;
       }
 
       [${ATTR}="label"] {
@@ -4056,8 +4091,46 @@ const FEATURES = {
     const normalize = (value) =>
       (value || "").replace(/\s+/g, " ").trim().toLowerCase();
 
+    const isShortcutNode = (node) => {
+      if (!(node instanceof HTMLElement)) return false;
+      if (node.tagName === "KBD") return true;
+      const text = normalize(node.textContent || "");
+      const className = String(node.className || "");
+      return (
+        /\bshortcut\b/i.test(className) ||
+        /^[⌘⇧⌥⌃^]*(?:[a-z0-9]|space|enter|tab|esc)$/i.test(text) ||
+        /^(?:ctrl|control|alt|option|shift|cmd|command)\+/.test(text)
+      );
+    };
+
+    const isBadgeNode = (node) => {
+      if (!(node instanceof HTMLElement)) return false;
+      const className = String(node.className || "");
+      return (
+        /\bbadge\b/i.test(className) ||
+        /\bdisambiguated-digits\b/i.test(className) ||
+        (/\babsolute\b/.test(className) && /^\d+$/.test(normalize(node.textContent || "")))
+      );
+    };
+
+    const nodeLabelText = (node) => {
+      if (!(node instanceof HTMLElement)) return "";
+      const childLabels = Array.from(node.children)
+        .filter(
+          (child) =>
+            child instanceof HTMLElement &&
+            !isShortcutNode(child) &&
+            !isBadgeNode(child) &&
+            child.getAttribute(ATTR) !== "badge",
+        )
+        .map((child) => nodeLabelText(child))
+        .filter(Boolean);
+      if (childLabels.length) return childLabels.join(" ");
+      return normalize(node.textContent || "");
+    };
+
     const buttonLabel = (node) =>
-      normalize(node.getAttribute("aria-label") || node.textContent || "")
+      normalize(node.getAttribute("aria-label") || nodeLabelText(node))
         .replace(/\s*(?:[⌘⇧⌥⌃^]|ctrl|control|alt|option|shift|cmd|command)\+?.*$/i, "")
         .trim();
 
@@ -4291,6 +4364,12 @@ const FEATURES = {
       if (icon instanceof SVGElement) {
         setImportantStyle(icon, "display", "block");
         setImportantStyle(icon, "flex-shrink", "0");
+      }
+
+      for (const node of button.querySelectorAll("span, div")) {
+        if (isBadgeNode(node)) {
+          markNode(node, "badge");
+        }
       }
     };
 
