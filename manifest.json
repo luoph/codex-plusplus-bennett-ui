@@ -1,12 +1,12 @@
 {
-  "id": "co.bennett.ui-improvements",
-  "name": "Bennett's UI Improvements",
-  "version": "0.1.6",
+  "id": "ui-improvements",
+  "name": "UI Improvements",
+  "version": "1.0.3",
   "githubRepo": "b-nnett/codex-plusplus-bennett-ui",
-  "description": "Quality-of-life UI tweaks for Codex: hide upgrade prompts, surface usage and message metrics.",
+  "description": "Forked quality-of-life UI tweaks for Codex with local sidebar project color adjustments.",
   "author": {
-    "name": "bennett",
-    "url": "https://github.com/anomalyco/codex-plusplus"
+    "name": "local",
+    "url": "https://github.com/b-nnett/codex-plusplus-bennett-ui"
   },
   "tags": [
     "ui",

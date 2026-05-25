@@ -34,6 +34,10 @@
  *                                   assistant messages on hover.
  *  • slash-menu-polish  Tightens the composer slash menu with denser rows,
  *                       clearer active state, and calmer section headers.
+ *  • session-loading-spinner  Shows a lightweight loading spinner near the
+ *                             composer when switching sessions.
+ *  • main-sidebar-layout  Keeps Codex++ tweak entries out of the main app
+ *                         sidebar while preserving Settings navigation.
  *
  * Authoring notes
  * ---------------
@@ -52,6 +56,7 @@ module.exports = {
       startMainProjectLabelProvider(api);
       startMainSidebarBatchMenuProvider(api);
       startMainSlashMenuShortcutBridge(api);
+      startMainUpdateStateProvider(api);
       return;
     }
 
@@ -70,6 +75,8 @@ module.exports = {
         "sidebar-chat-multi-select": true,
         "show-pinned-chat-project-names": true,
         "slash-menu-polish": true,
+        "session-loading-spinner": true,
+        "main-sidebar-layout": true,
       },
     };
     this._state = state;
@@ -194,6 +201,18 @@ function renderSettings(root, state) {
       title: "Slash menu polish",
       description:
         "Tighten the composer slash menu with denser rows, clearer active state, and calmer section headers.",
+    },
+    {
+      id: "session-loading-spinner",
+      title: "Session loading spinner",
+      description:
+        "Show a compact spinner above the composer while a session is loading.",
+    },
+    {
+      id: "main-sidebar-layout",
+      title: "Main sidebar layout",
+      description:
+        "Hide Codex++ tweak navigation from the main sidebar, keep Settings navigation, gate the Update pill, and add responsive main-content spacing.",
     },
   ];
 
@@ -457,6 +476,11 @@ const FEATURES = {
     let bridgeRequestSeq = 0;
 
     const log = (...a) => api.log.info("[usage]", ...a);
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
 
     // ── parsing ────────────────────────────────────────────────────────
     const isVisibleElement = (node) => {
@@ -938,12 +962,22 @@ const FEATURES = {
      *
      * Returns the parent element to mount into, or null if not found.
      */
+    const findUsageSidebar = () => {
+      const sidebar = document.querySelector(ASIDE_SELECTOR);
+      if (!(sidebar instanceof HTMLElement)) return null;
+      if (!isVisibleElement(sidebar)) return null;
+      const rect = sidebar.getBoundingClientRect();
+      return rect.width >= 180 ? sidebar : null;
+    };
+
     const findSidebarSlot = () => {
+      const sidebar = findUsageSidebar();
+      if (!sidebar) return null;
       // Look for the (now hidden) upgrade pill via its prev-display marker.
-      const prev = document.querySelector('[data-codexpp-prev-display]');
+      const prev = sidebar.querySelector('[data-codexpp-prev-display]');
       if (prev && prev.parentElement) return prev.parentElement;
       // Fallback: any visible button literally labelled "Upgrade".
-      const btns = document.querySelectorAll('button, a');
+      const btns = sidebar.querySelectorAll('button, a');
       for (const b of btns) {
         const t = (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
         if (t === "upgrade") return b.parentElement;
@@ -953,7 +987,7 @@ const FEATURES = {
       if (!/\bWin/i.test(navigator.platform || navigator.userAgent || "")) {
         return null;
       }
-      const existingSlot = document.querySelector('[data-codexpp="usage-slot"]');
+      const existingSlot = sidebar.querySelector('[data-codexpp="usage-slot"]');
       if (existingSlot instanceof HTMLElement) return existingSlot;
       for (const b of btns) {
         const t = (b.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -985,6 +1019,15 @@ const FEATURES = {
       if (!snapshot || (!snapshot.fiveHour && !snapshot.weekly)) return;
       const slot = findSidebarSlot();
       if (!slot) {
+        if (mounted) {
+          mounted.remove();
+          mounted = null;
+        }
+        for (const stale of document.querySelectorAll(
+          '[data-codexpp="usage-box"], [data-codexpp="usage-boxes"]',
+        )) {
+          stale.remove();
+        }
         if (!ensureMounted._warned) {
           log("ensureMounted: no sidebar slot found yet");
           ensureMounted._warned = true;
@@ -1121,6 +1164,7 @@ const FEATURES = {
     const SECTION_ICON_ATTR = "data-codexpp-slash-section-icon";
     const INPUT_MODE_ATTR = "data-codexpp-slash-input-mode";
     const PROGRAM_SCROLL_ATTR = "data-codexpp-slash-programmatic-scroll";
+    const HOVER_SUPPRESS_ATTR = "data-codexpp-slash-hover-suppressed";
     const OVERLAY_NOISE_ATTR = "data-codexpp-slash-overlay-noise";
     const FAVORITES_GROUP_ATTR = "data-codexpp-slash-favorites";
     const FAVORITE_KEY_ATTR = "data-codexpp-slash-favorite-key";
@@ -1460,10 +1504,24 @@ const FEATURES = {
         [data-list-navigation-item="true"][aria-selected="true"] {
         background-color: color-mix(
           in srgb,
-          var(--color-token-text-primary) 11%,
+          var(--color-token-text-primary, currentColor) 11%,
           transparent
         ) !important;
         color: var(--color-token-text-primary) !important;
+        opacity: 1 !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][${FAVORITE_CLONE_ATTR}="true"]:hover,
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"]
+        [data-list-navigation-item="true"][${FAVORITE_CLONE_ATTR}="true"][aria-selected="true"] {
+        background-color: color-mix(
+          in srgb,
+          var(--color-token-text-primary, currentColor) 10%,
+          transparent
+        ) !important;
         opacity: 1 !important;
       }
 
@@ -1484,8 +1542,22 @@ const FEATURES = {
       [data-composer-overlay-floating-ui="true"]
         [${MENU_ATTR}="true"][${PROGRAM_SCROLL_ATTR}="true"]
         .vertical-scroll-fade-mask
+        [data-list-navigation-item="true"],
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${HOVER_SUPPRESS_ATTR}="true"]
+        .vertical-scroll-fade-mask
         [data-list-navigation-item="true"] {
         pointer-events: none !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${HOVER_SUPPRESS_ATTR}="true"]
+        [data-list-navigation-item="true"]:hover:not([aria-selected="true"]),
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${HOVER_SUPPRESS_ATTR}="true"]
+        [data-list-navigation-item="true"]:focus-visible:not([aria-selected="true"]) {
+        background-color: transparent !important;
+        opacity: 0.9 !important;
       }
 
       [data-composer-overlay-floating-ui="true"]
@@ -1562,6 +1634,14 @@ const FEATURES = {
         .${FAVORITE_BUTTON_CLASS}[data-favorite="true"] {
         opacity: 1 !important;
         transform: scale(1) !important;
+      }
+
+      [data-composer-overlay-floating-ui="true"]
+        [${MENU_ATTR}="true"][${HOVER_SUPPRESS_ATTR}="true"]
+        [data-list-navigation-item="true"]:hover
+        .${FAVORITE_BUTTON_CLASS}:not([data-favorite="true"]) {
+        opacity: 0 !important;
+        transform: scale(0.92) !important;
       }
 
       [data-composer-overlay-floating-ui="true"]
@@ -1663,8 +1743,20 @@ const FEATURES = {
 
     const scrollHandlers = new Map();
     const pointerHandlers = new Map();
+    const hoverGuardHandlers = new Map();
+    const wheelHandlers = new Map();
+    const hoverScrollStates = new WeakMap();
+    const hoverSuppressStates = new WeakMap();
     const scrollAnimations = new Map();
     const titleTimers = new Map();
+    const HOVER_GUARD_EVENTS = [
+      "pointermove",
+      "pointerover",
+      "pointerenter",
+      "mousemove",
+      "mouseover",
+      "mouseenter",
+    ];
     const NAV_NOISE_SELECTOR = [
       '[data-codexpp="nav-group"]',
       '[data-codexpp="pages-group"]',
@@ -1679,10 +1771,14 @@ const FEATURES = {
       subtree: true,
     };
     let scanFrame = 0;
+    let scanTimer = 0;
     let homePruneFrame = 0;
     let hardPruneTimer = 0;
     let disposed = false;
     let observer = null;
+    let documentHoverGuard = null;
+    let slashRowScrollAllowedUntil = 0;
+    const nativeScrollIntoView = Element.prototype.scrollIntoView;
 
     const normText = (node) =>
       String(node?.textContent || "").replace(/\s+/g, " ").trim();
@@ -1707,6 +1803,275 @@ const FEATURES = {
         /\bTweak Store\b/.test(text) ||
         /Better TerminalKeyboard ShortcutsDatabase Explorer/.test(text)
       );
+    };
+
+    const stopHoverSelectionEvent = (menu, event) => {
+      if (!(menu instanceof HTMLElement)) return;
+      trackPointerPosition(menu, event);
+      if (shouldBlockSuppressedHover(menu, event)) {
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        return;
+      }
+      freezeHoverScroll(menu);
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+    };
+
+    const installDocumentHoverGuard = () => {
+      if (documentHoverGuard) return;
+      documentHoverGuard = (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        stopHoverSelectionEvent(target.closest(`[${MENU_ATTR}="true"]`), event);
+      };
+      HOVER_GUARD_EVENTS.forEach((type) =>
+        window.addEventListener(type, documentHoverGuard, true),
+      );
+      HOVER_GUARD_EVENTS.forEach((type) =>
+        document.addEventListener(type, documentHoverGuard, true),
+      );
+    };
+
+    const allowSlashRowScrollIntoView = (duration = 220) => {
+      slashRowScrollAllowedUntil = Math.max(
+        slashRowScrollAllowedUntil,
+        performance.now() + duration,
+      );
+    };
+
+    const isSlashMenuRow = (node) =>
+      node instanceof HTMLElement &&
+      node.matches('[data-list-navigation-item="true"]') &&
+      !!node.closest(`[${MENU_ATTR}="true"]`);
+
+    const hoverSuppressStateFor = (menu) => {
+      let state = hoverSuppressStates.get(menu);
+      if (!state) {
+        state = {
+          active: false,
+          pointerX: null,
+          pointerY: null,
+          releaseAfter: 0,
+        };
+        hoverSuppressStates.set(menu, state);
+      }
+      return state;
+    };
+
+    const eventPointerPosition = (event) => {
+      if (!event || typeof event.clientX !== "number" || typeof event.clientY !== "number") {
+        return null;
+      }
+      return { x: event.clientX, y: event.clientY };
+    };
+
+    const trackPointerPosition = (menu, event) => {
+      const point = eventPointerPosition(event);
+      if (!point) return;
+      const state = hoverSuppressStateFor(menu);
+      if (!state.active) {
+        state.pointerX = point.x;
+        state.pointerY = point.y;
+      }
+    };
+
+    const clearHoverSelection = (menu) => {
+      const state = hoverSuppressStateFor(menu);
+      const pointerTarget =
+        typeof state.pointerX === "number" && typeof state.pointerY === "number"
+          ? document.elementFromPoint(state.pointerX, state.pointerY)
+          : null;
+      const rows = new Set(
+        Array.from(menu.querySelectorAll('[data-list-navigation-item="true"]:hover')),
+      );
+      const pointerRow = pointerTarget?.closest?.('[data-list-navigation-item="true"]');
+      if (pointerRow instanceof HTMLElement && menu.contains(pointerRow)) {
+        rows.add(pointerRow);
+      }
+      menu
+        .querySelectorAll('[data-list-navigation-item="true"][aria-selected="true"]')
+        .forEach((row) => {
+          if (!(row instanceof HTMLElement)) return;
+          rows.add(row);
+          const rect = row.getBoundingClientRect();
+          if (
+            typeof state.pointerX === "number" &&
+            typeof state.pointerY === "number" &&
+            state.pointerX >= rect.left &&
+            state.pointerX <= rect.right &&
+            state.pointerY >= rect.top &&
+            state.pointerY <= rect.bottom
+          ) {
+            rows.add(row);
+          }
+        });
+      rows.forEach((row) => {
+        if (!(row instanceof HTMLElement)) return;
+        row.setAttribute("aria-selected", "false");
+        row.blur();
+      });
+    };
+
+    const suppressHoverUntilPointerMoves = (menu, duration = 900) => {
+      if (!(menu instanceof HTMLElement)) return;
+      const state = hoverSuppressStateFor(menu);
+      state.active = true;
+      state.releaseAfter = performance.now() + duration;
+      menu.setAttribute(HOVER_SUPPRESS_ATTR, "true");
+      clearHoverSelection(menu);
+      [0, 80, 240].forEach((delay) => {
+        window.setTimeout(() => {
+          if (menu.hasAttribute(HOVER_SUPPRESS_ATTR)) clearHoverSelection(menu);
+        }, delay);
+      });
+    };
+
+    const clearHoverSuppression = (menu) => {
+      if (!(menu instanceof HTMLElement)) return;
+      const state = hoverSuppressStateFor(menu);
+      state.active = false;
+      state.releaseAfter = 0;
+      menu.removeAttribute(HOVER_SUPPRESS_ATTR);
+      if (!menu.hasAttribute(PROGRAM_SCROLL_ATTR)) {
+        menu.setAttribute(INPUT_MODE_ATTR, "pointer");
+      }
+    };
+
+    const shouldBlockSuppressedHover = (menu, event) => {
+      const state = hoverSuppressStateFor(menu);
+      if (!state.active) return false;
+      const point = eventPointerPosition(event);
+      const now = performance.now();
+      const scroller = menu.querySelector(".vertical-scroll-fade-mask");
+      const programmatic =
+        menu.hasAttribute(PROGRAM_SCROLL_ATTR) ||
+        (scroller instanceof HTMLElement &&
+          typeof hoverScrollStateFor(scroller).programmaticTarget === "number" &&
+          now < hoverScrollStateFor(scroller).programmaticUntil);
+
+      if (!point) return true;
+      if (state.pointerX === null || state.pointerY === null) {
+        if (!programmatic && now >= state.releaseAfter - 450) {
+          clearHoverSuppression(menu);
+          state.pointerX = point.x;
+          state.pointerY = point.y;
+          return false;
+        }
+        state.pointerX = point.x;
+        state.pointerY = point.y;
+        return true;
+      }
+      const moved = Math.hypot(point.x - state.pointerX, point.y - state.pointerY);
+      if (moved >= 5 && !programmatic && now >= state.releaseAfter - 450) {
+        clearHoverSuppression(menu);
+        state.pointerX = point.x;
+        state.pointerY = point.y;
+        return false;
+      }
+      return true;
+    };
+
+    const hoverScrollStateFor = (scroller) => {
+      let state = hoverScrollStates.get(scroller);
+      if (!state) {
+        state = {
+          freezeTop: scroller.scrollTop,
+          freezeUntil: 0,
+          lastTop: scroller.scrollTop,
+          programmaticTarget: null,
+          programmaticUntil: 0,
+          restoreFrame: 0,
+        };
+        hoverScrollStates.set(scroller, state);
+      }
+      return state;
+    };
+
+    const enforceHoverScrollFreeze = (scroller) => {
+      const state = hoverScrollStateFor(scroller);
+      const now = performance.now();
+      const currentTop = scroller.scrollTop;
+      const programmaticActive =
+        typeof state.programmaticTarget === "number" && now < state.programmaticUntil;
+      const programmaticDown = programmaticActive && state.programmaticTarget >= state.lastTop;
+
+      if (now <= state.freezeUntil && (!programmaticActive || programmaticDown)) {
+        if (currentTop < state.freezeTop - 1) {
+          scroller.scrollTop = state.freezeTop;
+          state.lastTop = state.freezeTop;
+          return true;
+        }
+        state.freezeTop = Math.max(state.freezeTop, currentTop);
+      }
+
+      state.lastTop = scroller.scrollTop;
+      return false;
+    };
+
+    const requestHoverScrollFreezeFrame = (scroller) => {
+      const state = hoverScrollStateFor(scroller);
+      if (state.restoreFrame) return;
+      const tick = () => {
+        state.restoreFrame = 0;
+        enforceHoverScrollFreeze(scroller);
+        if (performance.now() <= state.freezeUntil) {
+          state.restoreFrame = requestAnimationFrame(tick);
+        }
+      };
+      state.restoreFrame = requestAnimationFrame(tick);
+    };
+
+    const queueHoverScrollFreezeChecks = (scroller) => {
+      [0, 16, 80, 180, 360].forEach((delay) => {
+        window.setTimeout(() => enforceHoverScrollFreeze(scroller), delay);
+      });
+    };
+
+    const freezeHoverScroll = (menu) => {
+      const scroller = menu.querySelector(".vertical-scroll-fade-mask");
+      if (!(scroller instanceof HTMLElement)) return;
+      const state = hoverScrollStateFor(scroller);
+      const now = performance.now();
+      if (
+        typeof state.programmaticTarget === "number" &&
+        now < state.programmaticUntil &&
+        state.programmaticTarget < scroller.scrollTop - 1
+      ) {
+        state.freezeUntil = 0;
+        state.freezeTop = scroller.scrollTop;
+        state.lastTop = scroller.scrollTop;
+        return;
+      }
+      const stableTop = Math.max(state.lastTop, scroller.scrollTop);
+      state.freezeTop = Math.max(state.freezeTop, stableTop);
+      state.freezeUntil = Math.max(state.freezeUntil, now + 450);
+      requestHoverScrollFreezeFrame(scroller);
+      queueHoverScrollFreezeChecks(scroller);
+    };
+
+    const clearHoverScrollFreeze = (scroller) => {
+      const state = hoverScrollStateFor(scroller);
+      state.freezeUntil = 0;
+      state.freezeTop = scroller.scrollTop;
+      state.lastTop = scroller.scrollTop;
+    };
+
+    const allowProgrammaticScroll = (scroller, targetTop, duration = 900) => {
+      const state = hoverScrollStateFor(scroller);
+      if (targetTop < scroller.scrollTop - 1) {
+        state.freezeUntil = 0;
+        state.freezeTop = targetTop;
+      }
+      state.programmaticTarget = targetTop;
+      state.programmaticUntil = performance.now() + duration;
+    };
+
+    const patchedScrollIntoView = function (...args) {
+      if (isSlashMenuRow(this) && performance.now() > slashRowScrollAllowedUntil) {
+        return;
+      }
+      return nativeScrollIntoView.apply(this, args);
     };
 
     const looksLikeSlashPanel = (node) => {
@@ -2169,25 +2534,30 @@ const FEATURES = {
       );
     };
 
-    const selectNavigationRow = (scroller, row) => {
+    const selectNavigationRow = (scroller, row, options = {}) => {
       if (!(row instanceof HTMLElement)) return;
       const menu = scroller.closest(`[${MENU_ATTR}="true"]`);
-      menu?.setAttribute(INPUT_MODE_ATTR, "keyboard");
+      if (options.inputMode !== false) {
+        menu?.setAttribute(INPUT_MODE_ATTR, options.inputMode || "keyboard");
+      }
       navigationRows(scroller).forEach((item) =>
         item.setAttribute("aria-selected", item === row ? "true" : "false"),
       );
+      allowSlashRowScrollIntoView();
       row.scrollIntoView({ block: "nearest" });
       updateTopbar(scroller);
     };
 
     const ensureInitialFavoriteSelection = (scroller) => {
       if (scroller.dataset.codexppSlashFavoriteSelectionReady === "true") return;
+      if (scroller.closest(`[${MENU_ATTR}="true"]`)?.hasAttribute(HOVER_SUPPRESS_ATTR)) return;
       const firstFavorite = favoriteRows(scroller)[0];
       if (!(firstFavorite instanceof HTMLElement)) return;
-      selectNavigationRow(scroller, firstFavorite);
+      selectNavigationRow(scroller, firstFavorite, { inputMode: false });
       scroller.dataset.codexppSlashFavoriteSelectionReady = "true";
       const keepFavoriteSelected = () => {
         if (!scroller.isConnected) return;
+        if (scroller.closest(`[${MENU_ATTR}="true"]`)?.hasAttribute(HOVER_SUPPRESS_ATTR)) return;
         if (scroller.dataset.codexppSlashFavoriteSelectionTouched === "true") return;
         const nextFirstFavorite = favoriteRows(scroller)[0];
         if (!(nextFirstFavorite instanceof HTMLElement)) return;
@@ -2245,8 +2615,7 @@ const FEATURES = {
         }
         const animation = scrollAnimations.get(scroller);
         if (animation) {
-          cancelAnimationFrame(animation);
-          scrollAnimations.delete(scroller);
+          cancelScrollAnimation(scroller);
         }
         const pointerHandler = pointerHandlers.get(scroller);
         if (pointerHandler) {
@@ -2254,11 +2623,24 @@ const FEATURES = {
           scroller.removeEventListener("pointerdown", pointerHandler);
           pointerHandlers.delete(scroller);
         }
+        const wheelHandler = wheelHandlers.get(scroller);
+        if (wheelHandler) {
+          scroller.removeEventListener("wheel", wheelHandler);
+          wheelHandlers.delete(scroller);
+        }
+        const hoverGuardHandler = hoverGuardHandlers.get(scroller);
+        if (hoverGuardHandler) {
+          HOVER_GUARD_EVENTS.forEach((type) =>
+            scroller.removeEventListener(type, hoverGuardHandler, true),
+          );
+          hoverGuardHandlers.delete(scroller);
+        }
       }
       if (scroller instanceof HTMLElement) removeFavoriteSection(scroller);
       menu.removeAttribute(MENU_ATTR);
       menu.removeAttribute(INPUT_MODE_ATTR);
       menu.removeAttribute(PROGRAM_SCROLL_ATTR);
+      menu.removeAttribute(HOVER_SUPPRESS_ATTR);
       menu.querySelectorAll(`[${TOPBAR_ATTR}]`).forEach((node) => node.remove());
       menu.querySelectorAll(`.${FAVORITE_BUTTON_CLASS}`).forEach((node) => node.remove());
       menu.querySelectorAll(`.${SKILL_COPY_CLASS}`).forEach((copy) => {
@@ -2416,12 +2798,15 @@ const FEATURES = {
       const menu = scroller.closest(`[${MENU_ATTR}="true"]`);
       menu?.setAttribute(INPUT_MODE_ATTR, "keyboard");
       menu?.setAttribute(PROGRAM_SCROLL_ATTR, "true");
+      if (menu instanceof HTMLElement) suppressHoverUntilPointerMoves(menu);
+      scroller.dataset.codexppSlashFavoriteSelectionTouched = "true";
       scroller.scrollLeft = 0;
       const targetTop = sectionTop(scroller, section.group);
       const adjustedTop =
         sections.indexOf(section) > 0
           ? Math.min(targetTop + 1, scroller.scrollHeight - scroller.clientHeight)
           : targetTop;
+      allowProgrammaticScroll(scroller, adjustedTop);
       const topbar = scroller.previousElementSibling;
       if (topbar instanceof HTMLElement) {
         topbar.dataset.forcedActiveSection = section.key;
@@ -2448,9 +2833,16 @@ const FEATURES = {
       return Math.max(0, Math.min(target, scroller.scrollHeight - scroller.clientHeight));
     };
 
+    const cancelScrollAnimation = (scroller) => {
+      const animation = scrollAnimations.get(scroller);
+      if (!animation) return;
+      cancelAnimationFrame(animation.frame);
+      window.clearTimeout(animation.timer);
+      scrollAnimations.delete(scroller);
+    };
+
     const animateScrollTop = (scroller, targetTop, onStep, onDone) => {
-      const previous = scrollAnimations.get(scroller);
-      if (previous) cancelAnimationFrame(previous);
+      cancelScrollAnimation(scroller);
       const startTop = scroller.scrollTop;
       const delta = targetTop - startTop;
       if (Math.abs(delta) < 1) {
@@ -2461,19 +2853,31 @@ const FEATURES = {
       }
       const start = performance.now();
       const duration = 260;
+      const scheduleTick = () => {
+        const animation = { frame: 0, timer: 0 };
+        const run = (now = performance.now()) => {
+          if (scrollAnimations.get(scroller) !== animation) return;
+          cancelAnimationFrame(animation.frame);
+          window.clearTimeout(animation.timer);
+          tick(now);
+        };
+        animation.frame = requestAnimationFrame(run);
+        animation.timer = window.setTimeout(() => run(performance.now()), 16);
+        scrollAnimations.set(scroller, animation);
+      };
       const tick = (now) => {
         const progress = Math.min(1, (now - start) / duration);
         const eased = 1 - Math.pow(1 - progress, 3);
         scroller.scrollTop = startTop + delta * eased;
         onStep?.();
         if (progress < 1) {
-          scrollAnimations.set(scroller, requestAnimationFrame(tick));
+          scheduleTick();
         } else {
           scrollAnimations.delete(scroller);
           onDone?.();
         }
       };
-      scrollAnimations.set(scroller, requestAnimationFrame(tick));
+      scheduleTick();
     };
 
     const updateTopbar = (scroller, sections = groupSections(scroller)) => {
@@ -2531,19 +2935,40 @@ const FEATURES = {
       ensureInitialFavoriteSelection(scroller);
       reconcileFavoriteSelection(scroller);
       if (!scrollHandlers.has(scroller)) {
-        const handler = () => updateTopbar(scroller);
+        const handler = () => {
+          enforceHoverScrollFreeze(scroller);
+          updateTopbar(scroller);
+        };
         scroller.addEventListener("scroll", handler, { passive: true });
         scrollHandlers.set(scroller, handler);
       }
+      hoverScrollStateFor(scroller).lastTop = scroller.scrollTop;
       if (!pointerHandlers.has(scroller)) {
         const handler = (event) => {
           if (menu.hasAttribute(PROGRAM_SCROLL_ATTR)) return;
-          if (event.type === "pointermove") return;
+          if (event.type === "pointermove") {
+            if (!menu.hasAttribute(HOVER_SUPPRESS_ATTR)) {
+              menu.setAttribute(INPUT_MODE_ATTR, "pointer");
+            }
+            return;
+          }
           menu.setAttribute(INPUT_MODE_ATTR, "pointer");
         };
         scroller.addEventListener("pointermove", handler, { passive: true });
         scroller.addEventListener("pointerdown", handler, { passive: true });
         pointerHandlers.set(scroller, handler);
+      }
+      if (!wheelHandlers.has(scroller)) {
+        const handler = () => clearHoverScrollFreeze(scroller);
+        scroller.addEventListener("wheel", handler, { passive: true });
+        wheelHandlers.set(scroller, handler);
+      }
+      if (!hoverGuardHandlers.has(scroller)) {
+        const handler = (event) => {
+          stopHoverSelectionEvent(menu, event);
+        };
+        HOVER_GUARD_EVENTS.forEach((type) => scroller.addEventListener(type, handler, true));
+        hoverGuardHandlers.set(scroller, handler);
       }
     };
 
@@ -2554,6 +2979,9 @@ const FEATURES = {
           menu.isConnected &&
           menu.querySelector(".vertical-scroll-fade-mask"),
       );
+
+    installDocumentHoverGuard();
+    Element.prototype.scrollIntoView = patchedScrollIntoView;
 
     const keyDigit = (event) => {
       const key = String(event.key || "");
@@ -2579,6 +3007,7 @@ const FEATURES = {
         event.key === "PageDown" ||
         event.key === "PageUp"
       ) {
+        allowSlashRowScrollIntoView();
         menu.setAttribute(INPUT_MODE_ATTR, "keyboard");
         return;
       }
@@ -2638,8 +3067,16 @@ const FEATURES = {
     };
 
     const scheduleScan = () => {
-      if (scanFrame) return;
-      scanFrame = requestAnimationFrame(scan);
+      if (scanFrame || scanTimer) return;
+      const run = () => {
+        if (scanFrame) cancelAnimationFrame(scanFrame);
+        if (scanTimer) window.clearTimeout(scanTimer);
+        scanFrame = 0;
+        scanTimer = 0;
+        scan();
+      };
+      scanFrame = requestAnimationFrame(run);
+      scanTimer = window.setTimeout(run, 60);
     };
 
     const scheduleSlashWork = () => {
@@ -2665,6 +3102,7 @@ const FEATURES = {
       observer.disconnect();
       window.clearInterval(activeSlashInterval);
       if (scanFrame) cancelAnimationFrame(scanFrame);
+      if (scanTimer) window.clearTimeout(scanTimer);
       if (homePruneFrame) cancelAnimationFrame(homePruneFrame);
       if (hardPruneTimer) window.clearTimeout(hardPruneTimer);
       document.removeEventListener("input", scheduleSlashWork, true);
@@ -2681,8 +3119,31 @@ const FEATURES = {
         scroller.removeEventListener("pointerdown", handler);
       }
       pointerHandlers.clear();
+      for (const [scroller, handler] of wheelHandlers) {
+        scroller.removeEventListener("wheel", handler);
+      }
+      wheelHandlers.clear();
+      for (const [scroller, handler] of hoverGuardHandlers) {
+        HOVER_GUARD_EVENTS.forEach((type) =>
+          scroller.removeEventListener(type, handler, true),
+        );
+      }
+      hoverGuardHandlers.clear();
+      if (documentHoverGuard) {
+        HOVER_GUARD_EVENTS.forEach((type) =>
+          window.removeEventListener(type, documentHoverGuard, true),
+        );
+        HOVER_GUARD_EVENTS.forEach((type) =>
+          document.removeEventListener(type, documentHoverGuard, true),
+        );
+        documentHoverGuard = null;
+      }
+      if (Element.prototype.scrollIntoView === patchedScrollIntoView) {
+        Element.prototype.scrollIntoView = nativeScrollIntoView;
+      }
       for (const animation of scrollAnimations.values()) {
-        cancelAnimationFrame(animation);
+        cancelAnimationFrame(animation.frame);
+        window.clearTimeout(animation.timer);
       }
       scrollAnimations.clear();
       for (const timer of titleTimers.values()) window.clearTimeout(timer);
@@ -2706,6 +3167,9 @@ const FEATURES = {
       document
         .querySelectorAll(`[${PROGRAM_SCROLL_ATTR}]`)
         .forEach((node) => node.removeAttribute(PROGRAM_SCROLL_ATTR));
+      document
+        .querySelectorAll(`[${HOVER_SUPPRESS_ATTR}]`)
+        .forEach((node) => node.removeAttribute(HOVER_SUPPRESS_ATTR));
       document
         .querySelectorAll(`[${OVERLAY_ATTR}]`)
         .forEach((node) => node.removeAttribute(OVERLAY_ATTR));
@@ -3405,8 +3869,11 @@ const FEATURES = {
   "match-sidebar-width"(api) {
     const STYLE_ID = "codexpp-match-sidebar-width";
     const STORAGE_KEY = "match-sidebar-width:last";
-    const ASIDE_SELECTOR =
-      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
     const SETTINGS_SIDEBAR_SELECTOR =
       ".window-fx-sidebar-surface.w-token-sidebar";
     const MIN_EXPANDED_WIDTH = 240;
@@ -3538,6 +4005,7 @@ const FEATURES = {
         width: 100% !important;
         min-width: 0 !important;
         min-height: calc(var(--spacing-token-button-composer, 2rem) * 2.15) !important;
+        padding: var(--spacing-3, 0.75rem) var(--spacing-3_5, 0.875rem) !important;
         color: var(--color-token-text-primary) !important;
         border: 1px solid color-mix(in srgb, currentColor 14%, transparent) !important;
         border-radius: var(--radius-lg, 0.5rem) !important;
@@ -3560,6 +4028,16 @@ const FEATURES = {
 
       [${ATTR}="button"] svg {
         flex-shrink: 0;
+      }
+
+      [${ATTR}="badge"] {
+        display: inline-flex !important;
+        position: absolute !important;
+        top: var(--spacing-2, 0.5rem) !important;
+        right: var(--spacing-2, 0.5rem) !important;
+        translate: none !important;
+        transform: none !important;
+        pointer-events: none !important;
       }
 
       [${ATTR}="label"] {
@@ -3632,8 +4110,46 @@ const FEATURES = {
     const normalize = (value) =>
       (value || "").replace(/\s+/g, " ").trim().toLowerCase();
 
+    const isShortcutNode = (node) => {
+      if (!(node instanceof HTMLElement)) return false;
+      if (node.tagName === "KBD") return true;
+      const text = normalize(node.textContent || "");
+      const className = String(node.className || "");
+      return (
+        /\bshortcut\b/i.test(className) ||
+        /^[⌘⇧⌥⌃^]*(?:[a-z0-9]|space|enter|tab|esc)$/i.test(text) ||
+        /^(?:ctrl|control|alt|option|shift|cmd|command)\+/.test(text)
+      );
+    };
+
+    const isBadgeNode = (node) => {
+      if (!(node instanceof HTMLElement)) return false;
+      const className = String(node.className || "");
+      return (
+        /\bbadge\b/i.test(className) ||
+        /\bdisambiguated-digits\b/i.test(className) ||
+        (/\babsolute\b/.test(className) && /^\d+$/.test(normalize(node.textContent || "")))
+      );
+    };
+
+    const nodeLabelText = (node) => {
+      if (!(node instanceof HTMLElement)) return "";
+      const childLabels = Array.from(node.children)
+        .filter(
+          (child) =>
+            child instanceof HTMLElement &&
+            !isShortcutNode(child) &&
+            !isBadgeNode(child) &&
+            child.getAttribute(ATTR) !== "badge",
+        )
+        .map((child) => nodeLabelText(child))
+        .filter(Boolean);
+      if (childLabels.length) return childLabels.join(" ");
+      return normalize(node.textContent || "");
+    };
+
     const buttonLabel = (node) =>
-      normalize(node.getAttribute("aria-label") || node.textContent || "")
+      normalize(node.getAttribute("aria-label") || nodeLabelText(node))
         .replace(/\s*(?:[⌘⇧⌥⌃^]|ctrl|control|alt|option|shift|cmd|command)\+?.*$/i, "")
         .trim();
 
@@ -3648,7 +4164,11 @@ const FEATURES = {
 
     const findMainSidebar = () => {
       const aside = document.querySelector(
-        "aside.pointer-events-auto.relative.flex.overflow-hidden",
+        [
+          "aside.pointer-events-auto.relative.flex.overflow-hidden",
+          "aside.pointer-events-auto.relative.flex.overflow-visible",
+          "aside.pointer-events-auto.relative.flex",
+        ].join(", "),
       );
       if (aside instanceof HTMLElement) return aside;
       return null;
@@ -3864,6 +4384,12 @@ const FEATURES = {
         setImportantStyle(icon, "display", "block");
         setImportantStyle(icon, "flex-shrink", "0");
       }
+
+      for (const node of button.querySelectorAll("span, div")) {
+        if (isBadgeNode(node)) {
+          markNode(node, "badge");
+        }
+      }
     };
 
     const apply = () => {
@@ -3959,8 +4485,11 @@ const FEATURES = {
     const SELECTED_ATTR = "data-codexpp-sidebar-chat-selected";
     const TARGET_ATTR = "data-codexpp-sidebar-chat-selected-target";
     const MENU_ATTR = "data-codexpp-sidebar-chat-multi-select-menu";
-    const ASIDE_SELECTOR =
-      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
     const THREAD_SELECTOR = [
       "[data-app-action-sidebar-thread-row]",
       "[data-app-action-sidebar-thread-id]",
@@ -4422,9 +4951,13 @@ const FEATURES = {
     const CONTENT_ATTR = "data-codexpp-pinned-chat-project-name-content";
     const COMPACT_ATTR = "data-codexpp-pinned-chat-project-name-compact-row";
     const COLOR_STORAGE_KEY = "sidebar-project-backgrounds:colors";
+    const LEGACY_STORAGE_KEY = "codexpp:storage:co.bennett.ui-improvements";
     const ORGANIZE_MODE_KEY = "codex:persisted-atom:sidebar-organize-mode-v1";
-    const ASIDE_SELECTOR =
-      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
     const labels = new Map();
     let disposed = false;
     let refreshInFlight = false;
@@ -4624,7 +5157,10 @@ const FEATURES = {
 
     const projectColorFor = (label) => {
       const key = normalizeProjectName(label);
-      const storedPrefs = api.storage.get(COLOR_STORAGE_KEY, {});
+      const storedPrefs = {
+        ...legacyColorPrefs(),
+        ...api.storage.get(COLOR_STORAGE_KEY, {}),
+      };
       const prefs = {
         ...(storedPrefs && typeof storedPrefs === "object" && !Array.isArray(storedPrefs)
           ? storedPrefs
@@ -4632,10 +5168,14 @@ const FEATURES = {
         ...(window.__codexppSidebarProjectColorPrefs || {}),
       };
       const colors = {
-        blue: "var(--color-token-charts-blue, var(--color-token-text-link-foreground))",
+        blue: "#60a5fa",
+        cyan: "#67e8f9",
+        teal: "#5eead4",
         green: "var(--color-token-charts-green, var(--color-token-text-secondary))",
         yellow: "var(--color-token-charts-yellow, var(--color-token-text-secondary))",
+        orange: "#fdba74",
         red: "var(--color-token-charts-red, var(--color-token-text-secondary))",
+        indigo: "#818cf8",
         pink: "var(--pink-400, var(--color-token-charts-purple, var(--color-token-text-link-foreground)))",
         purple: "var(--color-token-charts-purple, var(--color-token-text-link-foreground))",
         gray: "var(--color-token-text-secondary)",
@@ -4649,6 +5189,15 @@ const FEATURES = {
       }
       return colors[auto[hash % auto.length]];
     };
+
+    function legacyColorPrefs() {
+      try {
+        const value = JSON.parse(window.localStorage.getItem(LEGACY_STORAGE_KEY) || "{}")?.[COLOR_STORAGE_KEY];
+        return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      } catch {
+        return {};
+      }
+    }
 
     const liveProjectInfoFor = (label, cwd) => {
       const key = normalizeProjectName(label);
@@ -5019,8 +5568,12 @@ const FEATURES = {
     const ATTR = "data-codexpp-sidebar-project-backgrounds";
     const MENU_ATTR = "data-codexpp-sidebar-project-color-menu";
     const COLOR_STORAGE_KEY = "sidebar-project-backgrounds:colors";
-    const ASIDE_SELECTOR =
-      "aside.pointer-events-auto.relative.flex.overflow-hidden";
+    const LEGACY_STORAGE_KEY = "codexpp:storage:co.bennett.ui-improvements";
+    const ASIDE_SELECTOR = [
+      "aside.pointer-events-auto.relative.flex.overflow-hidden",
+      "aside.pointer-events-auto.relative.flex.overflow-visible",
+      "aside.pointer-events-auto.relative.flex",
+    ].join(", ");
     const EXCLUDED_LABELS = new Set([
       "account",
       "automations",
@@ -5046,8 +5599,20 @@ const FEATURES = {
       {
         id: "blue",
         label: "Blue",
-        value: "var(--color-token-charts-blue, var(--color-token-text-link-foreground))",
+        value: "#60a5fa",
         textValue: "var(--codexpp-project-blue-text)",
+      },
+      {
+        id: "cyan",
+        label: "Cyan",
+        value: "#67e8f9",
+        textValue: "var(--codexpp-project-cyan-text)",
+      },
+      {
+        id: "teal",
+        label: "Teal",
+        value: "#5eead4",
+        textValue: "var(--codexpp-project-teal-text)",
       },
       {
         id: "green",
@@ -5062,10 +5627,22 @@ const FEATURES = {
         textValue: "var(--codexpp-project-yellow-text)",
       },
       {
+        id: "orange",
+        label: "Orange",
+        value: "#fdba74",
+        textValue: "var(--codexpp-project-orange-text)",
+      },
+      {
         id: "red",
         label: "Red",
         value: "var(--color-token-charts-red, var(--color-token-text-secondary))",
         textValue: "var(--codexpp-project-red-text)",
+      },
+      {
+        id: "indigo",
+        label: "Indigo",
+        value: "#818cf8",
+        textValue: "var(--codexpp-project-indigo-text)",
       },
       {
         id: "pink",
@@ -5098,20 +5675,28 @@ const FEATURES = {
     style.id = STYLE_ID;
     style.textContent = `
       :root {
-        --codexpp-project-blue-text: var(--color-token-charts-blue, var(--color-token-text-link-foreground));
+        --codexpp-project-blue-text: color-mix(in srgb, #60a5fa 72%, black);
+        --codexpp-project-cyan-text: color-mix(in srgb, #67e8f9 62%, black);
+        --codexpp-project-teal-text: color-mix(in srgb, #5eead4 64%, black);
         --codexpp-project-green-text: color-mix(in srgb, var(--color-token-charts-green, currentColor) 72%, black);
         --codexpp-project-yellow-text: color-mix(in srgb, var(--color-token-charts-yellow, currentColor) 42%, black);
+        --codexpp-project-orange-text: color-mix(in srgb, #fdba74 62%, black);
         --codexpp-project-red-text: color-mix(in srgb, var(--color-token-charts-red, currentColor) 82%, black);
+        --codexpp-project-indigo-text: color-mix(in srgb, #818cf8 70%, black);
         --codexpp-project-pink-text: color-mix(in srgb, var(--pink-400, var(--color-token-charts-purple, currentColor)) 68%, black);
         --codexpp-project-purple-text: color-mix(in srgb, var(--color-token-charts-purple, currentColor) 82%, black);
         --codexpp-project-gray-text: color-mix(in srgb, var(--color-token-text-primary, currentColor) 25%, black);
       }
 
       .electron-dark {
-        --codexpp-project-blue-text: var(--color-token-text-link-foreground, var(--color-token-charts-blue));
+        --codexpp-project-blue-text: #93c5fd;
+        --codexpp-project-cyan-text: #a5f3fc;
+        --codexpp-project-teal-text: #99f6e4;
         --codexpp-project-green-text: var(--color-token-charts-green, var(--color-token-text-primary));
         --codexpp-project-yellow-text: var(--color-token-charts-yellow, var(--color-token-text-primary));
+        --codexpp-project-orange-text: #fed7aa;
         --codexpp-project-red-text: color-mix(in srgb, var(--color-token-charts-red, currentColor) 86%, white);
+        --codexpp-project-indigo-text: #c7d2fe;
         --codexpp-project-pink-text: var(--pink-400, var(--color-token-charts-purple, var(--color-token-text-primary)));
         --codexpp-project-purple-text: color-mix(in srgb, var(--color-token-charts-purple, currentColor) 88%, white);
         --codexpp-project-gray-text: var(--color-token-text-secondary);
@@ -5202,6 +5787,8 @@ const FEATURES = {
       }
 
       aside.pointer-events-auto.relative.flex.overflow-hidden
+        [role="button"].hover\\:bg-token-list-hover-background:not(.group\\/folder-row),
+      aside.pointer-events-auto.relative.flex.overflow-visible
         [role="button"].hover\\:bg-token-list-hover-background:not(.group\\/folder-row) {
         margin-inline: 4px !important;
         width: calc(100% - 8px) !important;
@@ -5318,12 +5905,12 @@ const FEATURES = {
 
     const blueTokenOverrideFor = (text) => {
       const color = paletteFor(text);
-      return color.id === "blue" ? "" : color.value;
+      return color.value;
     };
 
     const linkTokenOverrideFor = (text) => {
       const color = paletteFor(text);
-      return color.id === "blue" ? "" : textColorFor(text);
+      return textColorFor(text);
     };
 
     const markRows = (rows) => {
@@ -5358,12 +5945,25 @@ const FEATURES = {
     const projectKey = (label) => normalize(label);
 
     function readColorPrefs() {
+      const legacy = legacyColorPrefs();
       const value = api.storage.get(COLOR_STORAGE_KEY, {});
-      const stored = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      const stored = value && typeof value === "object" && !Array.isArray(value) ? { ...legacy, ...value } : legacy;
+      if (Object.keys(legacy).length > 0 && (!value || Object.keys(value).length === 0)) {
+        api.storage.set(COLOR_STORAGE_KEY, legacy);
+      }
       const cached = window[colorPrefsCacheKey];
       return cached && typeof cached === "object" && !Array.isArray(cached)
         ? { ...stored, ...cached }
         : stored;
+    }
+
+    function legacyColorPrefs() {
+      try {
+        const value = JSON.parse(window.localStorage.getItem(LEGACY_STORAGE_KEY) || "{}")?.[COLOR_STORAGE_KEY];
+        return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      } catch {
+        return {};
+      }
     }
 
     const writeColorPrefs = () => {
@@ -5830,14 +6430,28 @@ const FEATURES = {
     };
 
     let scheduled = false;
+    let scheduleFrame = 0;
+    let scheduleTimer = 0;
+    const runScheduledApply = () => {
+      if (!scheduled) return;
+      scheduled = false;
+      if (scheduleFrame) {
+        cancelAnimationFrame(scheduleFrame);
+        scheduleFrame = 0;
+      }
+      if (scheduleTimer) {
+        window.clearTimeout(scheduleTimer);
+        scheduleTimer = 0;
+      }
+      if (disposed) return;
+      apply();
+    };
+
     const scheduleApply = () => {
       if (scheduled || disposed) return;
       scheduled = true;
-      requestAnimationFrame(() => {
-        scheduled = false;
-        if (disposed) return;
-        apply();
-      });
+      scheduleFrame = requestAnimationFrame(runScheduledApply);
+      scheduleTimer = window.setTimeout(runScheduledApply, 80);
     };
 
     let childListFrame = 0;
@@ -5849,12 +6463,29 @@ const FEATURES = {
       });
     };
 
+    apply();
     scheduleApply();
     const retryTimers = [250, 1000, 2500].map((delay) =>
       window.setTimeout(scheduleApply, delay),
     );
     const observer = new MutationObserver(scheduleApplySoon);
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: [
+        "aria-label",
+        "class",
+        "data-app-action-sidebar-project-collapsed",
+        "data-app-action-sidebar-project-id",
+        "data-app-action-sidebar-project-label",
+        "data-app-action-sidebar-project-row",
+        "data-codexpp-sidebar-project-expanded",
+        ATTR,
+        "role",
+        "style",
+      ],
+      childList: true,
+      subtree: true,
+    });
     document.addEventListener("contextmenu", onProjectContextMenu, true);
     document.addEventListener("pointerdown", onProjectOverflowTrigger, true);
     document.addEventListener("click", onProjectOverflowTrigger, true);
@@ -5867,6 +6498,8 @@ const FEATURES = {
       disposed = true;
       observer.disconnect();
       if (childListFrame) cancelAnimationFrame(childListFrame);
+      if (scheduleFrame) cancelAnimationFrame(scheduleFrame);
+      if (scheduleTimer) window.clearTimeout(scheduleTimer);
       retryTimers.forEach((timer) => window.clearTimeout(timer));
       document.removeEventListener("contextmenu", onProjectContextMenu, true);
       document.removeEventListener("pointerdown", onProjectOverflowTrigger, true);
@@ -5875,6 +6508,881 @@ const FEATURES = {
       document.removeEventListener("visibilitychange", scheduleApply);
       closeMenu();
       clearMarks();
+      style.remove();
+    };
+  },
+
+  /**
+   * Keep Codex++ tweak navigation out of the main app sidebar while preserving
+   * the real Settings sidebar, and tune the main thread/composer layout for
+   * narrow windows.
+   */
+  "main-sidebar-layout"(api) {
+    const STYLE_ID = "codexpp-main-sidebar-layout-style";
+    const HIDE_ATTR = "data-codexpp-hide-main-sidebar-layout";
+    const SHOW_UPDATE_ATTR = "data-codexpp-show-update-pill";
+    const COMPACT_LAYOUT_ATTR = "data-codexpp-compact-thread-layout";
+    const SIDEBAR_OVERLAP_ATTR = "data-codexpp-sidebar-overlap-layout";
+    const MAIN_MARGIN_ATTR = "data-codexpp-main-content-margin-layout";
+    const MAIN_CONTENT_ATTR = "data-codexpp-sidebar-safe-main";
+    const MAIN_WIDE_BLOCK_ATTR = "data-codexpp-main-content-wide-block";
+    const COMPOSER_CARD_ATTR = "data-codexpp-compact-composer-card";
+    const COMPOSER_CONTAINER_ATTR = "data-codexpp-compact-composer-container";
+    const CODEXPP_SELECTOR =
+      '[data-codexpp="native-nav-header"], [data-codexpp="nav-group"], [data-codexpp="pages-group"]';
+    const RELEASES_BUTTON_SELECTOR = 'button[title="Open Codex++ releases"]';
+    const SETTINGS_LABELS = new Set([
+      "appearance",
+      "configuration",
+      "personalization",
+      "mcp servers",
+      "git",
+      "environments",
+      "worktrees",
+      "browser use",
+      "computer use",
+      "usage",
+    ]);
+    let observer = null;
+    let tickTimer = 0;
+    let updatePollTimer = 0;
+    let layoutPollTimer = 0;
+    let lastLayoutDebugKey = "";
+    let updateAvailable = false;
+    let lastUpdateCheckAt = 0;
+
+    document.getElementById(STYLE_ID)?.remove();
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      [${HIDE_ATTR}="true"] {
+        display: none !important;
+      }
+
+      ${RELEASES_BUTTON_SELECTOR} {
+        display: none !important;
+      }
+
+      ${RELEASES_BUTTON_SELECTOR}[${SHOW_UPDATE_ATTR}="true"] {
+        display: inline-flex !important;
+        background: var(--color-token-bg-fog, transparent) !important;
+        border: 1px solid var(--color-token-border-default, var(--color-token-border-light, transparent)) !important;
+        color: var(--color-token-text-secondary, currentColor) !important;
+        box-shadow: none !important;
+      }
+
+      html[${COMPACT_LAYOUT_ATTR}] [${COMPOSER_CONTAINER_ATTR}="true"] {
+        padding-left: clamp(0.75rem, 2vw, 1.5rem) !important;
+        padding-right: clamp(0.75rem, 2vw, 1.5rem) !important;
+        padding-bottom: clamp(0.625rem, 1.4vh, 1rem) !important;
+      }
+
+      html[${SIDEBAR_OVERLAP_ATTR}] [${MAIN_CONTENT_ATTR}="true"] {
+        margin-left: var(--codexpp-ui-sidebar-overlap, 0px) !important;
+        width: calc(100% - var(--codexpp-ui-sidebar-overlap, 0px)) !important;
+        max-width: calc(100vw - var(--codexpp-ui-main-sidebar-width, 0px)) !important;
+        min-width: 0 !important;
+      }
+
+      html[${MAIN_MARGIN_ATTR}] [${MAIN_CONTENT_ATTR}="true"] {
+        box-sizing: border-box !important;
+        padding-left: var(--codexpp-ui-main-content-margin, 48px) !important;
+        padding-right: var(--codexpp-ui-main-content-margin, 48px) !important;
+        overflow-x: hidden !important;
+      }
+
+      html[${MAIN_MARGIN_ATTR}] [${MAIN_CONTENT_ATTR}="true"] p,
+      html[${MAIN_MARGIN_ATTR}] [${MAIN_CONTENT_ATTR}="true"] li,
+      html[${MAIN_MARGIN_ATTR}] [${MAIN_CONTENT_ATTR}="true"] pre,
+      html[${MAIN_MARGIN_ATTR}] [${MAIN_CONTENT_ATTR}="true"] code,
+      html[${MAIN_MARGIN_ATTR}] [${MAIN_CONTENT_ATTR}="true"] [class*="markdown"],
+      html[${MAIN_MARGIN_ATTR}] [${MAIN_CONTENT_ATTR}="true"] [class*="Markdown"] {
+        max-width: 100% !important;
+        overflow-wrap: anywhere !important;
+      }
+
+      html[${MAIN_MARGIN_ATTR}] [${MAIN_WIDE_BLOCK_ATTR}="true"] {
+        align-self: center !important;
+        box-sizing: border-box !important;
+        flex: 0 1 auto !important;
+        min-width: 0 !important;
+        width: calc(100% - var(--codexpp-ui-main-content-double-margin, 96px)) !important;
+        max-width: var(--codexpp-ui-main-content-max-width, 1040px) !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+      }
+
+      html[${COMPACT_LAYOUT_ATTR}] [${COMPOSER_CARD_ATTR}="true"] {
+        width: min(calc(100% - 1.5rem), 920px) !important;
+        max-width: min(920px, calc(100vw - 2rem)) !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+      }
+
+      @media (max-width: 1180px), (max-height: 760px) {
+        html[${COMPACT_LAYOUT_ATTR}] [${COMPOSER_CARD_ATTR}="true"] {
+          width: min(calc(100% - 1rem), 820px) !important;
+          max-width: calc(100vw - 1rem) !important;
+        }
+
+        html[${COMPACT_LAYOUT_ATTR}] [${COMPOSER_CARD_ATTR}="true"] textarea,
+        html[${COMPACT_LAYOUT_ATTR}] [${COMPOSER_CARD_ATTR}="true"] [contenteditable="true"],
+        html[${COMPACT_LAYOUT_ATTR}] [${COMPOSER_CARD_ATTR}="true"] [role="textbox"] {
+          font-size: 0.9375rem !important;
+          line-height: 1.45 !important;
+        }
+      }
+    `;
+    document.documentElement.appendChild(style);
+
+    const normalizedLabel = (value) =>
+      String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+    const controlLabels = (root) =>
+      Array.from(root.querySelectorAll("button, a, [role='button'], [role='link']"))
+        .map((el) =>
+          normalizedLabel(el.getAttribute("aria-label") || el.getAttribute("title") || el.textContent),
+        )
+        .filter(Boolean);
+
+    const hasSettingsSidebarLabels = (root) => {
+      const labels = controlLabels(root);
+      let count = 0;
+      for (const label of labels) {
+        if (SETTINGS_LABELS.has(label)) count++;
+      }
+      return count >= 2;
+    };
+
+    const relevantAncestors = (group) => {
+      const result = [];
+      let node = group.parentElement;
+      while (node && node !== document.documentElement) {
+        if (node instanceof HTMLElement && node.querySelector(CODEXPP_SELECTOR)) {
+          result.push(node);
+        }
+        node = node.parentElement;
+      }
+      return result;
+    };
+
+    const shouldHide = (group) => {
+      for (const root of relevantAncestors(group)) {
+        if (hasSettingsSidebarLabels(root)) return false;
+      }
+      return true;
+    };
+
+    const isVisibleElement = (el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      const computed = window.getComputedStyle(el);
+      return computed.display !== "none" && computed.visibility !== "hidden";
+    };
+
+    const findMainSidebar = () =>
+      Array.from(document.querySelectorAll("aside, nav, [role='navigation'], div"))
+        .filter((el) => el instanceof HTMLElement)
+        .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+        .filter(({ rect }) => (
+          rect.left <= 12 &&
+          rect.width >= 160 &&
+          rect.width <= 460 &&
+          rect.height >= window.innerHeight * 0.75
+        ))
+        .sort((a, b) => b.rect.width - a.rect.width)[0]?.el || null;
+
+    const findMainSidebarWidth = () =>
+      Math.round(findMainSidebar()?.getBoundingClientRect().width || 0);
+
+    const findMainContentWithoutSidebar = () =>
+      Array.from(document.querySelectorAll("main, [role='main'], div"))
+        .filter((el) => el instanceof HTMLElement && el !== document.body && isVisibleElement(el))
+        .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+        .filter(({ el, rect }) => (
+          rect.top <= 96 &&
+          rect.height >= window.innerHeight * 0.55 &&
+          rect.width >= Math.min(520, window.innerWidth * 0.55) &&
+          rect.right >= window.innerWidth * 0.68 &&
+          !hasSettingsSidebarLabels(el)
+        ))
+        .sort((a, b) => a.rect.width - b.rect.width || b.rect.height - a.rect.height)[0]?.el || null;
+
+    const findMainContent = (sidebar) => {
+      if (!(sidebar instanceof HTMLElement)) return findMainContentWithoutSidebar();
+      const sidebarRect = sidebar.getBoundingClientRect();
+      let node = sidebar;
+      while (node && node.parentElement && node !== document.body && node !== document.documentElement) {
+        const siblings = Array.from(node.parentElement.children).filter((child) => (
+          child instanceof HTMLElement &&
+          child !== node &&
+          isVisibleElement(child)
+        ));
+        const match = siblings
+          .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+          .filter(({ rect }) => (
+            rect.height >= window.innerHeight * 0.55 &&
+            rect.width >= Math.min(420, window.innerWidth * 0.35) &&
+            rect.right > sidebarRect.right + 120
+          ))
+          .sort((a, b) => Math.abs(a.rect.left - sidebarRect.right) - Math.abs(b.rect.left - sidebarRect.right))[0];
+        if (match) return match.el;
+        node = node.parentElement;
+      }
+      return findMainContentWithoutSidebar();
+    };
+
+    const shouldUseCompactComposerLayout = () => {
+      const sidebarWidth = findMainSidebarWidth();
+      document.documentElement.style.setProperty("--codexpp-ui-main-sidebar-width", `${sidebarWidth}px`);
+      return window.innerWidth <= 1400 || (sidebarWidth >= 260 && window.innerWidth <= 1700);
+    };
+
+    const clearWideBlockStyle = (el) => {
+      if (!(el instanceof HTMLElement)) return;
+      el.style.removeProperty("box-sizing");
+      el.style.removeProperty("width");
+      el.style.removeProperty("max-width");
+      el.style.removeProperty("flex-basis");
+      el.style.removeProperty("margin-left");
+      el.style.removeProperty("margin-right");
+    };
+
+    const logLayoutDebug = (payload) => {
+      const key = JSON.stringify(payload);
+      if (key === lastLayoutDebugKey) return;
+      lastLayoutDebugKey = key;
+      api.log.info("main content margin layout", payload);
+    };
+
+    const applyWideBlockMargins = (sidebar, main, enabled, margin) => {
+      if (!enabled || !(main instanceof HTMLElement)) {
+        document.querySelectorAll(`[${MAIN_WIDE_BLOCK_ATTR}]`).forEach((el) => {
+          clearWideBlockStyle(el);
+          el.removeAttribute(MAIN_WIDE_BLOCK_ATTR);
+        });
+        return;
+      }
+
+      const sidebarRight = sidebar instanceof HTMLElement ? sidebar.getBoundingClientRect().right : 0;
+      const mainRect = main.getBoundingClientRect();
+      const contentLeft = Math.max(sidebarRight, mainRect.left);
+      const contentRight = Math.min(window.innerWidth, mainRect.right || window.innerWidth);
+      const contentWidth = Math.max(320, contentRight - contentLeft);
+      const minWidth = Math.min(720, Math.max(420, contentWidth * 0.48));
+      const normalizeWideBlock = (el) => {
+        let node = el;
+        let best = el;
+        while (node?.parentElement && node.parentElement !== main && node.parentElement !== document.body) {
+          const parent = node.parentElement;
+          if (!(parent instanceof HTMLElement) || !isVisibleElement(parent)) break;
+          const rect = parent.getBoundingClientRect();
+          if (
+            rect.top < 72 ||
+            rect.height > window.innerHeight * 0.9 ||
+            rect.width < minWidth ||
+            rect.left < contentLeft - 8 ||
+            rect.right > contentRight + 8
+          ) {
+            break;
+          }
+          best = parent;
+          node = parent;
+        }
+        return best;
+      };
+      const candidates = Array.from(main.querySelectorAll("div, form, article, section"))
+        .filter((el) => el instanceof HTMLElement && isVisibleElement(el))
+        .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+        .filter(({ el, rect }) => {
+          const alreadyMarked = el.hasAttribute(MAIN_WIDE_BLOCK_ATTR);
+          const text = normalizedLabel(el.textContent).slice(0, 160);
+          const isFileEditCard =
+            text.includes("edited file") ||
+            text.includes("edited index.js") ||
+            text.includes("details") ||
+            text.includes("review") ||
+            text.includes("undo");
+          return (
+            el !== main &&
+            !(sidebar instanceof HTMLElement && sidebar.contains(el)) &&
+            rect.top >= 72 &&
+            rect.height >= 36 &&
+            rect.height <= window.innerHeight * 0.9 &&
+            rect.width >= minWidth &&
+            (
+              alreadyMarked ||
+              isFileEditCard ||
+              (
+                rect.left >= contentLeft - 4 &&
+                rect.left <= contentLeft + margin * 1.5 &&
+                rect.right >= contentRight - margin * 0.8
+              )
+            )
+          );
+        })
+        .map(({ el }) => {
+          const block = normalizeWideBlock(el);
+          return { el: block, rect: block.getBoundingClientRect() };
+        });
+      if (candidates.length === 0) {
+        const existing = Array.from(document.querySelectorAll(`[${MAIN_WIDE_BLOCK_ATTR}]`))
+          .filter((el) => el instanceof HTMLElement && main.contains(el) && isVisibleElement(el));
+        if (existing.length > 0) {
+          existing.forEach((el) => {
+            clearWideBlockStyle(el);
+            el.setAttribute(MAIN_WIDE_BLOCK_ATTR, "true");
+          });
+          logLayoutDebug({
+            viewport: Math.round(window.innerWidth),
+            sidebarRight: Math.round(sidebarRight),
+            mainLeft: Math.round(mainRect.left),
+            mainRight: Math.round(mainRect.right),
+            margin: Math.round(margin),
+            candidates: 0,
+            wideBlocks: existing.length,
+            stable: true,
+          });
+          return;
+        }
+      }
+
+      const candidateSet = new Set(candidates.map(({ el }) => el));
+      const wideBlocks = candidates
+        .filter(({ el }) => {
+          let node = el.parentElement;
+          while (node && node !== main && node !== document.body) {
+            if (candidateSet.has(node)) return false;
+            node = node.parentElement;
+          }
+          return true;
+        })
+        .map(({ el }) => el);
+      const wideSet = new Set(wideBlocks);
+
+      document.querySelectorAll(`[${MAIN_WIDE_BLOCK_ATTR}]`).forEach((el) => {
+        if (!wideSet.has(el)) {
+          clearWideBlockStyle(el);
+          el.removeAttribute(MAIN_WIDE_BLOCK_ATTR);
+        }
+      });
+      wideBlocks.forEach((el) => {
+        el.setAttribute(MAIN_WIDE_BLOCK_ATTR, "true");
+      });
+      logLayoutDebug({
+        viewport: Math.round(window.innerWidth),
+        sidebarRight: Math.round(sidebarRight),
+        mainLeft: Math.round(mainRect.left),
+        mainRight: Math.round(mainRect.right),
+        margin: Math.round(margin),
+        candidates: candidates.length,
+        wideBlocks: wideBlocks.length,
+      });
+    };
+
+    const applySidebarOverlapLayout = () => {
+      const sidebar = findMainSidebar();
+      if (sidebar && hasSettingsSidebarLabels(sidebar)) {
+        document.documentElement.removeAttribute(SIDEBAR_OVERLAP_ATTR);
+        document.documentElement.removeAttribute(MAIN_MARGIN_ATTR);
+        document.documentElement.style.removeProperty("--codexpp-ui-sidebar-overlap");
+        document.querySelectorAll(`[${MAIN_CONTENT_ATTR}]`).forEach((el) => {
+          el.removeAttribute(MAIN_CONTENT_ATTR);
+        });
+        document.querySelectorAll(`[${MAIN_WIDE_BLOCK_ATTR}]`).forEach((el) => {
+          clearWideBlockStyle(el);
+          el.removeAttribute(MAIN_WIDE_BLOCK_ATTR);
+        });
+        return;
+      }
+
+      const sidebarRect = sidebar?.getBoundingClientRect();
+      const main = findMainContent(sidebar);
+      const mainRect = main?.getBoundingClientRect();
+      const overlap = sidebarRect && mainRect ? Math.max(0, Math.round(sidebarRect.right - mainRect.left)) : 0;
+      const shouldOffset = overlap > 12 && Boolean(main);
+      const sidebarWidth = Math.round(sidebarRect?.width || 0);
+      const sidebarVisible = sidebarWidth >= 80 && Boolean(sidebarRect && sidebarRect.height > window.innerHeight * 0.5);
+      const availableWidth = Math.max(320, window.innerWidth - (sidebarVisible ? sidebarWidth : 0));
+      const marginLimit = availableWidth >= 2200 ? 128 : availableWidth >= 1800 ? 120 : 88;
+      const mainMargin = sidebarVisible
+        ? Math.round(Math.min(Math.max(availableWidth * 0.07, 64), marginLimit))
+        : 0;
+      const maxContentWidth = Math.max(720, Math.min(1120, availableWidth - mainMargin * 2));
+      const shouldAddMargin = Boolean(main) && mainMargin > 0;
+      const shouldAdjustWideBlocks = false;
+
+      document.documentElement.toggleAttribute(SIDEBAR_OVERLAP_ATTR, shouldOffset);
+      document.documentElement.toggleAttribute(MAIN_MARGIN_ATTR, shouldAddMargin);
+      document.documentElement.style.setProperty("--codexpp-ui-sidebar-overlap", `${shouldOffset ? overlap : 0}px`);
+      document.documentElement.style.setProperty("--codexpp-ui-main-sidebar-width", `${sidebarWidth}px`);
+      document.documentElement.style.setProperty("--codexpp-ui-main-content-margin", `${shouldAddMargin ? mainMargin : 0}px`);
+      document.documentElement.style.setProperty("--codexpp-ui-main-content-double-margin", `${shouldAddMargin ? mainMargin * 2 : 0}px`);
+      document.documentElement.style.setProperty("--codexpp-ui-main-content-max-width", `${maxContentWidth}px`);
+
+      document.querySelectorAll(`[${MAIN_CONTENT_ATTR}]`).forEach((el) => {
+        if (el !== main) el.removeAttribute(MAIN_CONTENT_ATTR);
+      });
+      if (shouldOffset || shouldAddMargin) {
+        main.setAttribute(MAIN_CONTENT_ATTR, "true");
+      } else {
+        main?.removeAttribute(MAIN_CONTENT_ATTR);
+      }
+      applyWideBlockMargins(sidebar, main, shouldAdjustWideBlocks, mainMargin);
+    };
+
+    const containsComposerControls = (root) => root.querySelectorAll("button").length >= 1;
+
+    const isComposerEditor = (el) => {
+      if (!(el instanceof HTMLElement) || !isVisibleElement(el)) return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom < window.innerHeight * 0.55) return false;
+      if (rect.width < 240 || rect.height < 12) return false;
+      const label = normalizedLabel(el.getAttribute("aria-label") || el.getAttribute("placeholder"));
+      return !label.includes("search") && !label.includes("filter");
+    };
+
+    const findComposerCard = () => {
+      const editors = Array.from(
+        document.querySelectorAll("textarea, [contenteditable='true'], [role='textbox']"),
+      )
+        .filter(isComposerEditor)
+        .sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+
+      for (const editor of editors) {
+        let node = editor;
+        let best = null;
+        while (node && node !== document.body && node !== document.documentElement) {
+          if (!(node instanceof HTMLElement)) break;
+          const rect = node.getBoundingClientRect();
+          if (rect.bottom < window.innerHeight * 0.55) break;
+          if (
+            rect.width >= 420 &&
+            rect.height >= 48 &&
+            rect.height <= 240 &&
+            rect.bottom >= window.innerHeight - 190 &&
+            containsComposerControls(node)
+          ) {
+            best = node;
+          }
+          node = node.parentElement;
+        }
+        if (best) return best;
+      }
+      return null;
+    };
+
+    const findComposerContainer = (card) => {
+      let node = card?.parentElement;
+      let best = null;
+      const cardRect = card?.getBoundingClientRect();
+      while (node && node !== document.body && node !== document.documentElement) {
+        if (!(node instanceof HTMLElement)) break;
+        const rect = node.getBoundingClientRect();
+        if (rect.bottom < window.innerHeight * 0.55 || rect.height > 360) break;
+        if (!cardRect || rect.width >= cardRect.width) best = node;
+        node = node.parentElement;
+      }
+      return best || card?.parentElement || null;
+    };
+
+    const applyComposerLayout = () => {
+      const compact = shouldUseCompactComposerLayout();
+      document.documentElement.toggleAttribute(COMPACT_LAYOUT_ATTR, compact);
+      if (!compact) {
+        document.querySelectorAll(`[${COMPOSER_CARD_ATTR}], [${COMPOSER_CONTAINER_ATTR}]`).forEach((el) => {
+          el.removeAttribute(COMPOSER_CARD_ATTR);
+          el.removeAttribute(COMPOSER_CONTAINER_ATTR);
+        });
+        return;
+      }
+
+      const card = findComposerCard();
+      const container = findComposerContainer(card);
+      document.querySelectorAll(`[${COMPOSER_CARD_ATTR}]`).forEach((el) => {
+        if (el !== card) el.removeAttribute(COMPOSER_CARD_ATTR);
+      });
+      document.querySelectorAll(`[${COMPOSER_CONTAINER_ATTR}]`).forEach((el) => {
+        if (el !== container) el.removeAttribute(COMPOSER_CONTAINER_ATTR);
+      });
+      card?.setAttribute(COMPOSER_CARD_ATTR, "true");
+      container?.setAttribute(COMPOSER_CONTAINER_ATTR, "true");
+    };
+
+    const applyVisibility = () => {
+      for (const group of document.querySelectorAll(CODEXPP_SELECTOR)) {
+        if (!(group instanceof HTMLElement)) continue;
+        if (shouldHide(group)) {
+          group.setAttribute(HIDE_ATTR, "true");
+        } else {
+          group.removeAttribute(HIDE_ATTR);
+        }
+      }
+
+      for (const button of document.querySelectorAll(RELEASES_BUTTON_SELECTOR)) {
+        if (!(button instanceof HTMLElement)) continue;
+        if (normalizedLabel(button.textContent) !== "update") continue;
+        if (updateAvailable) {
+          button.setAttribute(SHOW_UPDATE_ATTR, "true");
+        } else {
+          button.removeAttribute(SHOW_UPDATE_ATTR);
+        }
+      }
+
+      applySidebarOverlapLayout();
+      applyComposerLayout();
+    };
+
+    const scheduleApply = () => {
+      if (tickTimer) return;
+      tickTimer = window.setTimeout(() => {
+        tickTimer = 0;
+        applyVisibility();
+      }, 50);
+    };
+
+    const refreshUpdatePill = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastUpdateCheckAt < 5000) return;
+      lastUpdateCheckAt = now;
+
+      try {
+        updateAvailable = await api.ipc.invoke("ui-improvements:update-available");
+      } catch (error) {
+        updateAvailable = false;
+        api.log.warn("failed to read Codex++ update state", String(error));
+      }
+      applyVisibility();
+    };
+
+    void refreshUpdatePill(true);
+    applyVisibility();
+    observer = new MutationObserver(scheduleApply);
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-codexpp", "aria-label", "title", "class"],
+    });
+    window.addEventListener("resize", scheduleApply);
+    window.visualViewport?.addEventListener("resize", scheduleApply);
+    window.addEventListener("orientationchange", scheduleApply);
+    layoutPollTimer = window.setInterval(scheduleApply, 1000);
+    updatePollTimer = window.setInterval(() => {
+      void refreshUpdatePill();
+    }, 30000);
+
+    return () => {
+      lastLayoutDebugKey = "";
+      observer?.disconnect();
+      observer = null;
+      if (updatePollTimer) window.clearInterval(updatePollTimer);
+      if (layoutPollTimer) window.clearInterval(layoutPollTimer);
+      if (tickTimer) window.clearTimeout(tickTimer);
+      document.querySelectorAll(`[${HIDE_ATTR}]`).forEach((el) => {
+        el.removeAttribute(HIDE_ATTR);
+      });
+      document.querySelectorAll(`[${SHOW_UPDATE_ATTR}]`).forEach((el) => {
+        el.removeAttribute(SHOW_UPDATE_ATTR);
+      });
+      document.documentElement.removeAttribute(COMPACT_LAYOUT_ATTR);
+      document.documentElement.removeAttribute(SIDEBAR_OVERLAP_ATTR);
+      document.documentElement.removeAttribute(MAIN_MARGIN_ATTR);
+      document.documentElement.style.removeProperty("--codexpp-ui-main-sidebar-width");
+      document.documentElement.style.removeProperty("--codexpp-ui-sidebar-overlap");
+      document.documentElement.style.removeProperty("--codexpp-ui-main-content-margin");
+      document.documentElement.style.removeProperty("--codexpp-ui-main-content-double-margin");
+      document.documentElement.style.removeProperty("--codexpp-ui-main-content-max-width");
+      document.querySelectorAll(`[${MAIN_CONTENT_ATTR}]`).forEach((el) => {
+        el.removeAttribute(MAIN_CONTENT_ATTR);
+      });
+      document.querySelectorAll(`[${MAIN_WIDE_BLOCK_ATTR}]`).forEach((el) => {
+        clearWideBlockStyle(el);
+        el.removeAttribute(MAIN_WIDE_BLOCK_ATTR);
+      });
+      document.querySelectorAll(`[${COMPOSER_CARD_ATTR}], [${COMPOSER_CONTAINER_ATTR}]`).forEach((el) => {
+        el.removeAttribute(COMPOSER_CARD_ATTR);
+        el.removeAttribute(COMPOSER_CONTAINER_ATTR);
+      });
+      window.removeEventListener("resize", scheduleApply);
+      window.visualViewport?.removeEventListener("resize", scheduleApply);
+      window.removeEventListener("orientationchange", scheduleApply);
+      style.remove();
+    };
+  },
+
+  /**
+   * Show a small loading affordance while Codex switches sessions. The anchor
+   * follows the composer card so it reads as part of the main input area rather
+   * than a global page blocker.
+   */
+  "session-loading-spinner"(api) {
+    const STYLE_ID = "codexpp-session-loading-spinner-style";
+    const SPINNER_ID = "codexpp-session-loading-spinner";
+    const LOADING_ATTR = "data-codexpp-session-loading";
+    let hideTimer = 0;
+    let maxTimer = 0;
+    let anchorFrame = 0;
+    let frameTimer = 0;
+    let frameIndex = 0;
+    let disposed = false;
+
+    document.getElementById(STYLE_ID)?.remove();
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${SPINNER_ID} {
+        align-items: center !important;
+        background: color-mix(in srgb, var(--color-token-bg-primary, var(--color-token-bg-fog, #fff)) 84%, transparent) !important;
+        border: 1px solid var(--color-token-border-default, color-mix(in srgb, currentColor 14%, transparent)) !important;
+        border-radius: 999px !important;
+        box-shadow: 0 10px 28px color-mix(in srgb, black 10%, transparent) !important;
+        color: var(--color-token-text-secondary, currentColor) !important;
+        display: none !important;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+        font-size: 1.375rem !important;
+        font-weight: 500 !important;
+        height: 2.5rem !important;
+        justify-content: center !important;
+        left: var(--codexpp-session-spinner-left, 50vw) !important;
+        line-height: 1 !important;
+        pointer-events: none !important;
+        position: fixed !important;
+        top: var(--codexpp-session-spinner-top, 50vh) !important;
+        transform: translate(-50%, -50%) !important;
+        width: 2.5rem !important;
+        z-index: 2147483000 !important;
+      }
+
+      #${SPINNER_ID} > span {
+        display: block !important;
+        transform: translateY(-0.02em) !important;
+      }
+
+      html[${LOADING_ATTR}="true"] #${SPINNER_ID} {
+        display: flex !important;
+      }
+    `;
+    document.documentElement.appendChild(style);
+
+    const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+    const isVisible = (el) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      const computed = window.getComputedStyle(el);
+      return computed.display !== "none" && computed.visibility !== "hidden";
+    };
+
+    const findMainSidebar = () => {
+      const candidates = Array.from(
+        document.querySelectorAll("aside, nav, [role='navigation'], div"),
+      )
+        .filter((el) => el instanceof HTMLElement)
+        .map((el) => ({ el, rect: el.getBoundingClientRect() }))
+        .filter(({ rect }) => (
+          rect.left <= 12 &&
+          rect.width >= 120 &&
+          rect.width <= 480 &&
+          rect.height >= window.innerHeight * 0.65
+        ))
+        .sort((a, b) => b.rect.width - a.rect.width);
+      return candidates[0]?.el || null;
+    };
+
+    const isComposerEditor = (el) => {
+      if (!(el instanceof HTMLElement) || !isVisible(el)) return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom < window.innerHeight * 0.5) return false;
+      if (rect.width < 240 || rect.height < 12) return false;
+      const label = normalize(el.getAttribute("aria-label") || el.getAttribute("placeholder"));
+      return !label.includes("search") && !label.includes("filter");
+    };
+
+    const containsComposerControls = (root) => root.querySelectorAll("button").length >= 1;
+
+    const findComposerCard = () => {
+      const editors = Array.from(
+        document.querySelectorAll("textarea, [contenteditable='true'], [role='textbox']"),
+      )
+        .filter(isComposerEditor)
+        .sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+
+      for (const editor of editors) {
+        let node = editor;
+        let best = null;
+        while (node && node !== document.body && node !== document.documentElement) {
+          if (!(node instanceof HTMLElement)) break;
+          const rect = node.getBoundingClientRect();
+          if (rect.bottom < window.innerHeight * 0.5) break;
+          if (
+            rect.width >= 360 &&
+            rect.height >= 44 &&
+            rect.height <= 260 &&
+            rect.bottom >= window.innerHeight - 260 &&
+            containsComposerControls(node)
+          ) {
+            best = node;
+          }
+          node = node.parentElement;
+        }
+        if (best) return best;
+      }
+      return null;
+    };
+
+    const applyAnchor = () => {
+      if (disposed) return;
+      const composer = findComposerCard();
+      if (composer) {
+        const rect = composer.getBoundingClientRect();
+        const verticalGap = Math.min(76, Math.max(60, window.innerHeight * 0.06));
+        document.documentElement.style.setProperty(
+          "--codexpp-session-spinner-left",
+          `${Math.round(rect.left + rect.width / 2)}px`,
+        );
+        document.documentElement.style.setProperty(
+          "--codexpp-session-spinner-top",
+          `${Math.round(Math.max(96, rect.top - verticalGap))}px`,
+        );
+        return;
+      }
+
+      const sidebarRect = findMainSidebar()?.getBoundingClientRect();
+      const sidebarVisible = Boolean(
+        sidebarRect &&
+          sidebarRect.width >= 80 &&
+          sidebarRect.height >= window.innerHeight * 0.5,
+      );
+      const mainLeft = sidebarVisible ? sidebarRect.right : 0;
+      document.documentElement.style.setProperty(
+        "--codexpp-session-spinner-left",
+        `${Math.round(mainLeft + (window.innerWidth - mainLeft) / 2)}px`,
+      );
+      document.documentElement.style.setProperty(
+        "--codexpp-session-spinner-top",
+        `${Math.round(Math.min(window.innerHeight * 0.58, window.innerHeight - 220))}px`,
+      );
+    };
+
+    const scheduleAnchor = () => {
+      if (anchorFrame || disposed) return;
+      anchorFrame = requestAnimationFrame(() => {
+        anchorFrame = 0;
+        applyAnchor();
+      });
+    };
+
+    const ensureSpinner = () => {
+      const existing = document.getElementById(SPINNER_ID);
+      if (existing) {
+        if (!existing.querySelector("span")) {
+          const frame = document.createElement("span");
+          frame.textContent = spinnerFrames[frameIndex % spinnerFrames.length];
+          existing.textContent = "";
+          existing.appendChild(frame);
+        }
+        return;
+      }
+      const spinner = document.createElement("div");
+      spinner.id = SPINNER_ID;
+      spinner.setAttribute("aria-hidden", "true");
+      const frame = document.createElement("span");
+      frame.textContent = spinnerFrames[frameIndex % spinnerFrames.length];
+      spinner.appendChild(frame);
+      document.documentElement.appendChild(spinner);
+    };
+
+    const hideSpinner = () => {
+      if (hideTimer) window.clearTimeout(hideTimer);
+      if (maxTimer) window.clearTimeout(maxTimer);
+      if (frameTimer) window.clearInterval(frameTimer);
+      hideTimer = 0;
+      maxTimer = 0;
+      frameTimer = 0;
+      document.documentElement.removeAttribute(LOADING_ATTR);
+    };
+
+    const showSpinner = (duration = 1200) => {
+      ensureSpinner();
+      applyAnchor();
+      const frame = document.querySelector(`#${SPINNER_ID} > span`);
+      if (frame instanceof HTMLElement) {
+        frame.textContent = spinnerFrames[frameIndex % spinnerFrames.length];
+      }
+      if (!frameTimer) {
+        frameTimer = window.setInterval(() => {
+          const current = document.querySelector(`#${SPINNER_ID} > span`);
+          if (!(current instanceof HTMLElement)) return;
+          frameIndex = (frameIndex + 1) % spinnerFrames.length;
+          current.textContent = spinnerFrames[frameIndex];
+        }, 80);
+      }
+      document.documentElement.setAttribute(LOADING_ATTR, "true");
+      if (hideTimer) window.clearTimeout(hideTimer);
+      if (maxTimer) window.clearTimeout(maxTimer);
+      hideTimer = window.setTimeout(hideSpinner, Math.max(450, duration));
+      maxTimer = window.setTimeout(hideSpinner, 5000);
+    };
+
+    const isSessionNavigation = (target) => {
+      if (!(target instanceof Element)) return false;
+      if (target.closest("textarea, input, [contenteditable='true'], [role='textbox']")) return false;
+      if (target.closest("[data-app-action-sidebar-thread-id], [data-sidebar-thread-id]")) return true;
+      if (target.closest("[data-app-action-sidebar-task-id], [data-sidebar-task-id]")) return true;
+
+      const item = target.closest("div[role='listitem'], a, button, [role='tab']");
+      if (!(item instanceof HTMLElement) || !isVisible(item)) return false;
+      const itemRect = item.getBoundingClientRect();
+      const sidebarRect = findMainSidebar()?.getBoundingClientRect();
+      const inSidebar = Boolean(
+        sidebarRect &&
+          itemRect.left >= sidebarRect.left - 4 &&
+          itemRect.right <= sidebarRect.right + 4,
+      );
+      const inTopTabs = itemRect.top < 72 && itemRect.left > (sidebarRect?.right || 0) + 16;
+      if (!inSidebar && !inTopTabs) return false;
+
+      const label = normalize(
+        item.getAttribute("aria-label") || item.getAttribute("title") || item.textContent,
+      );
+      return Boolean(label && !["settings", "new chat", "search"].includes(label) && label.length >= 2);
+    };
+
+    const onClick = (event) => {
+      if (isSessionNavigation(event.target)) showSpinner(1200);
+    };
+
+    ensureSpinner();
+    applyAnchor();
+    showSpinner(900);
+    const observer = new MutationObserver(scheduleAnchor);
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style", "aria-label", "placeholder"],
+    });
+    document.addEventListener("click", onClick, true);
+    window.addEventListener("resize", scheduleAnchor);
+    window.visualViewport?.addEventListener("resize", scheduleAnchor);
+    window.addEventListener("orientationchange", scheduleAnchor);
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      document.removeEventListener("click", onClick, true);
+      window.removeEventListener("resize", scheduleAnchor);
+      window.visualViewport?.removeEventListener("resize", scheduleAnchor);
+      window.removeEventListener("orientationchange", scheduleAnchor);
+      if (anchorFrame) cancelAnimationFrame(anchorFrame);
+      hideSpinner();
+      document.getElementById(SPINNER_ID)?.remove();
+      document.documentElement.style.removeProperty("--codexpp-session-spinner-left");
+      document.documentElement.style.removeProperty("--codexpp-session-spinner-top");
       style.remove();
     };
   },
@@ -5988,6 +7496,61 @@ const SIDEBAR_BATCH_MENU_HANDLER_KEY =
   "__bennettUiImprovementsSidebarBatchMenuHandler";
 const SLASH_MENU_SHORTCUT_BRIDGE_KEY =
   "__bennettUiImprovementsSlashMenuShortcutBridge";
+const UPDATE_STATE_HANDLER_KEY =
+  "__bennettUiImprovementsUpdateStateHandler";
+
+function startMainUpdateStateProvider(api) {
+  if (!globalThis[UPDATE_STATE_HANDLER_KEY]) {
+    api.ipc.handle("ui-improvements:update-available", () =>
+      isCodexPlusPlusUpdateAvailable(),
+    );
+    globalThis[UPDATE_STATE_HANDLER_KEY] = true;
+  }
+
+  api.log.info("[ui-improvements] update state provider active");
+}
+
+function compareSemver(a, b) {
+  const left = String(a || "").replace(/^v/i, "").split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0);
+  const right = String(b || "").replace(/^v/i, "").split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0);
+  const length = Math.max(left.length, right.length, 3);
+  for (let i = 0; i < length; i++) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function readLocalJson(path) {
+  try {
+    const fs = require("node:fs");
+    return JSON.parse(fs.readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function codexPlusPlusUserDir() {
+  const path = require("node:path");
+  return path.join(
+    process.env.HOME || require("node:os").homedir(),
+    "Library",
+    "Application Support",
+    "codex-plusplus",
+  );
+}
+
+function isCodexPlusPlusUpdateAvailable() {
+  const path = require("node:path");
+  const userDir = codexPlusPlusUserDir();
+  const config = readLocalJson(path.join(userDir, "config.json"));
+  const check = config?.codexPlusPlus?.updateCheck;
+  if (check?.updateAvailable === true) return true;
+
+  const selfUpdate = readLocalJson(path.join(userDir, "self-update-state.json"));
+  if (!selfUpdate?.currentVersion || !selfUpdate?.latestVersion) return false;
+  return compareSemver(selfUpdate.latestVersion, selfUpdate.currentVersion) > 0;
+}
 
 function startMainMetricsProvider(api) {
   const service = createMetricsService(api);
@@ -6071,10 +7634,7 @@ function startMainSlashMenuShortcutBridge(api) {
       const url = wc.getURL?.() || "";
       if (!url.startsWith("app://") && !url.includes("codex")) return;
       event.preventDefault();
-      wc.executeJavaScript(
-        `window.dispatchEvent(new CustomEvent("codexpp-slash-section-shortcut", { detail: { digit: ${digit} } }))`,
-        true,
-      ).catch(() => {});
+      wc.executeJavaScript(dispatchSlashMenuShortcutScript(digit), true).catch(() => {});
     });
   };
 
@@ -6091,13 +7651,77 @@ function startMainSlashMenuShortcutBridge(api) {
 }
 
 function slashMenuShortcutDigit(input = {}) {
-  if (input.type !== "keyDown") return 0;
-  if (!(input.meta || input.control) || input.alt || input.shift) return 0;
-  const key = String(input.key || "");
+  if (input.type !== "keyDown" && input.type !== "rawKeyDown") return 0;
+  if (!(input.meta || input.control || input.command) || input.alt || input.shift) return 0;
+  const key = String(input.key || input.keyCode || "");
   if (/^[1-9]$/.test(key)) return Number(key);
   const code = String(input.code || "");
   const match = /^(?:Digit|Numpad)([1-9])$/.exec(code);
   return match ? Number(match[1]) : 0;
+}
+
+function dispatchSlashMenuShortcutScript(digit) {
+  return `
+    (() => {
+      const digit = ${Number(digit) || 0};
+      const activeMenu = () =>
+        Array.from(document.querySelectorAll('[data-codexpp-slash-menu="true"]')).find(
+          (menu) =>
+            menu instanceof HTMLElement &&
+            menu.isConnected &&
+            menu.querySelector(".vertical-scroll-fade-mask"),
+        );
+      const menu = activeMenu();
+      const scroller = menu?.querySelector(".vertical-scroll-fade-mask");
+      const before = scroller instanceof HTMLElement ? scroller.scrollTop : null;
+      const shortcutEvent = new CustomEvent("codexpp-slash-section-shortcut", {
+        detail: { digit },
+        cancelable: true,
+      });
+      window.dispatchEvent(shortcutEvent);
+
+      window.setTimeout(() => {
+        const currentMenu = activeMenu();
+        const currentScroller = currentMenu?.querySelector(".vertical-scroll-fade-mask");
+        if (!(currentScroller instanceof HTMLElement)) return;
+        if (before !== null && Math.abs(currentScroller.scrollTop - before) > 1) return;
+        const sections = Array.from(currentScroller.children).filter(
+          (node) =>
+            node instanceof HTMLElement &&
+            node.getAttribute("data-codexpp-slash-section") &&
+            node.getAttribute("data-codexpp-slash-section-empty") !== "true" &&
+            node.querySelector('[data-list-navigation-item="true"]'),
+        );
+        const target = sections[digit - 1];
+        if (!(target instanceof HTMLElement)) return;
+        const rawTop =
+          currentScroller.scrollTop +
+          target.getBoundingClientRect().top -
+          currentScroller.getBoundingClientRect().top;
+        const adjustedTop =
+          digit > 1
+            ? Math.min(rawTop + 1, currentScroller.scrollHeight - currentScroller.clientHeight)
+            : rawTop;
+        currentMenu.setAttribute("data-codexpp-slash-input-mode", "keyboard");
+        currentMenu.setAttribute("data-codexpp-slash-programmatic-scroll", "true");
+        currentMenu.setAttribute("data-codexpp-slash-hover-suppressed", "true");
+        currentScroller.scrollLeft = 0;
+        currentScroller.scrollTo({
+          top: Math.max(
+            0,
+            Math.min(adjustedTop, currentScroller.scrollHeight - currentScroller.clientHeight),
+          ),
+          behavior: "smooth",
+        });
+        window.setTimeout(
+          () => currentMenu.removeAttribute("data-codexpp-slash-programmatic-scroll"),
+          320,
+        );
+      }, 120);
+
+      return shortcutEvent.defaultPrevented;
+    })()
+  `;
 }
 
 function showSidebarBatchMenu(payload) {
