@@ -40,6 +40,17 @@ cp -R . "$HOME/Library/Application Support/codex-plusplus/tweaks/ui-improvements
 
 然后在 Codex 中 reload Codex++ tweaks，或重启 Codex。
 
+## 避免重复 UI tweak
+
+不要同时启用 upstream 的 `co.bennett.ui-improvements` 和当前 fork。两个 tweak
+都会修改同一批 sidebar 和 Settings DOM，同时加载会导致左侧 sidebar 闪烁。
+
+如果已经安装 upstream tweak，请将它移出 active tweaks 目录，或在下面的配置中禁用：
+
+```sh
+$HOME/Library/Application Support/codex-plusplus/config.json
+```
+
 ## 验证
 
 ```sh

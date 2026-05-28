@@ -51,6 +51,19 @@ cp -R . "$HOME/Library/Application Support/codex-plusplus/tweaks/ui-improvements
 
 Then reload Codex++ tweaks from Codex, or restart Codex.
 
+## Avoid Duplicate UI Tweaks
+
+Do not keep the upstream `co.bennett.ui-improvements` tweak enabled at the
+same time as this fork. Both tweaks patch the same sidebar and Settings DOM,
+so loading both can cause the left sidebar to flicker.
+
+If the upstream tweak is already installed, move it out of the active tweaks
+directory or disable it in:
+
+```sh
+$HOME/Library/Application Support/codex-plusplus/config.json
+```
+
 ## Validate
 
 ```sh
